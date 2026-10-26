@@ -277,6 +277,9 @@ void PluginManagerActivity::loop() {
     ActivityWithSubactivity::loop();
     return;
   }
+  // Leaving force-deletes the install task, which holds the SD lock for the whole download,
+  // and every later SD access then waits forever. Ignore input until the task finishes.
+  if (workerTask_) return;
   if (SubPage::closeInput(renderer, mappedInput, goBack_)) return;
   if (state_ == State::Downloading) return;
   if (mappedInput.hasTouch()) {
