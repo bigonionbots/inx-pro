@@ -321,8 +321,8 @@ The X4 Pro may briefly disappear and re-enumerate during reset. If the port chan
 
 ### LilyGo T5 S3 E-Paper Pro / Pro Lite (experimental)
 
-Support for the 4.7" 960×540 T5 S3 is new and not yet verified on hardware. Expect layout rough edges, since the UI
-was designed for 800×480.
+Support for the 4.7" 960×540 T5 S3 is new. It has been tested on the Pro Lite; the Pro (with LoRa and GPS) has not
+been tried yet. Expect layout rough edges, since the UI was designed for 800×480.
 
 The board's USB-C port is the ESP32-S3's native USB-Serial-JTAG, commonly `/dev/ttyACM0` on Linux or
 `/dev/cu.usbmodemXXXX` on macOS. Back up the stock firmware before the first flash:

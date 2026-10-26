@@ -10,8 +10,8 @@
  *
  * The tables start as a copy of TouchOrientationX4Pro.cpp because that math depends only
  * on "touch arrives in framebuffer coordinates", not on the board. They are a separate
- * translation unit so a T5-specific correction, if hardware testing needs one, cannot
- * reach the X4 Pro. NOT YET CONFIRMED ON HARDWARE.
+ * translation unit so a T5-specific correction, if one is ever needed, cannot reach the
+ * X4 Pro. Confirmed unchanged on a T5 S3 Pro Lite.
  */
 
 #include "TouchOrientation.h"
