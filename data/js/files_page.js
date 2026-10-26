@@ -562,6 +562,12 @@ async function uploadCovers() {
   button.disabled = true;
   closeModal("cover-modal");
   setUploadStatus("Preparing cover art", "0/" + files.length, 0, true);
+  // Uploads into a missing folder fail ("Failed to create file on SD card"), and a fresh card
+  // has no /sleep. "Folder already exists" is the normal answer and is ignored.
+  const mkdirForm = new FormData();
+  mkdirForm.append("name", "sleep");
+  mkdirForm.append("path", "/");
+  await fetch("/mkdir", { method: "POST", body: mkdirForm }).catch(() => {});
   let completed = 0;
   for (let index = 0; index < files.length; index++) {
     const file = files[index];

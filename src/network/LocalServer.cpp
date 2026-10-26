@@ -1230,6 +1230,25 @@ void LocalServer::handleFileListData() const {
         break;
       }
     }
+#ifndef INX_SIMULATOR_WEB_ONLY
+    // The Books grid (epub_page.js) draws item.coverUrl; without it every book is a placeholder.
+    if (info.isEpub) {
+      String bookPath = currentPath;
+      if (!bookPath.endsWith("/")) bookPath += "/";
+      bookPath += info.name;
+      const std::string cachePath = epubCachePathForBookPath(bookPath.c_str());
+      const char* coverNames[] = {"thumb.jpg", "thumb.png", "thumb.bmp", "cover.jpg", "cover.bmp"};
+      for (const char* coverName : coverNames) {
+        const std::string coverPath = cachePath + "/" + coverName;
+        if (!SdMan.exists(coverPath.c_str())) continue;
+        String coverUrl = "/download?path=";
+        coverUrl += coverPath.c_str();
+        coverUrl += "&inline=1";
+        doc["coverUrl"] = coverUrl;
+        break;
+      }
+    }
+#endif
 
     const size_t written = serializeJson(doc, output, outputSize);
     if (written >= outputSize) {
