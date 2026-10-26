@@ -508,7 +508,9 @@ constexpr int NUM_BOLD_TAGS = sizeof(BOLD_TAGS) / sizeof(BOLD_TAGS[0]);
 const char* ITALIC_TAGS[] = {"i", "em"};
 constexpr int NUM_ITALIC_TAGS = sizeof(ITALIC_TAGS) / sizeof(ITALIC_TAGS[0]);
 
-const char* IMAGE_TAGS[] = {"img"};
+// SVG <image> (xlink:href) covers the Calibre-style "<svg><image .../></svg>" cover page, which
+// otherwise has no laid-out content and is skipped as a zero-page section.
+const char* IMAGE_TAGS[] = {"img", "image", "svg:image"};
 constexpr int NUM_IMAGE_TAGS = sizeof(IMAGE_TAGS) / sizeof(IMAGE_TAGS[0]);
 
 const char* SKIP_TAGS[] = {"head"};

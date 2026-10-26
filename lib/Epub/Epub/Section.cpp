@@ -29,7 +29,8 @@ namespace {
 // Image bounds now match the aspect-fitted raster dimensions, which also changes cached page layout.
 // Bionic reader text normalization changes word bytes and prefix offsets;
 // invalidate old section pages so they are rebuilt from normalized EPUB text.
-constexpr uint8_t SECTION_FILE_VERSION = 101;
+// SVG <image> elements are now laid out as images.
+constexpr uint8_t SECTION_FILE_VERSION = 102;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(float) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(bool) + sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint32_t);
