@@ -1,6 +1,6 @@
 #pragma once
 
-#if FREEINK_DEVICE_X4PRO
+#if INX_HAS_FRONTLIGHT
 #include <FrontlightManager.h>
 
 #include "system/FrontlightPreferences.h"
@@ -65,8 +65,8 @@ inline void persist() {
 /**
  * Edge-band frontlight gesture, shared by the reader and the Light drawer.
  *
- * A vertical swipe starting in the LEFT band adjusts colour temperature, in the RIGHT band
- * brightness. A swipe starting in the middle is left alone so the caller can use it for its
+ * A vertical swipe starting in the LEFT band adjusts colour temperature (boards with a warm/cool
+ * pair only), in the RIGHT band brightness. A swipe starting in the middle is left alone so the caller can use it for its
  * own thing - closing the book in the reader, closing the drawer on a page.
  *
  * Returns true when the gesture was consumed.
@@ -85,7 +85,7 @@ inline bool handleEdgeSwipe(const MappedInputManager& input, const GfxRenderer& 
     return false;
   }
 
-  if (startNx <= kBandLeftMaxNx) {
+  if (startNx <= kBandLeftMaxNx && frontlight.hasColorTemperature()) {
     const int next = stepBrightness(frontlight.colorTemperature(), up);
     frontlight.setColorTemperature(static_cast<uint8_t>(next));
     persist();

@@ -1,6 +1,6 @@
 #include "LightDrawer.h"
 
-#if FREEINK_DEVICE_X4PRO
+#if INX_HAS_FRONTLIGHT
 
 #include <Arduino.h>
 #include <GfxRenderer.h>

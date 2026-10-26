@@ -89,6 +89,9 @@ class GfxRenderer {
 
   int getScreenWidth() const;
   int getScreenHeight() const;
+  /** Native (unrotated) panel dimensions, as reported by the display at begin(). */
+  uint16_t getPanelWidth() const { return panelWidth; }
+  uint16_t getPanelHeight() const { return panelHeight; }
   void displayBuffer(const HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
   /** Starts a panel refresh and returns while the waveform is running. */
   void displayBufferAsync(const HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;

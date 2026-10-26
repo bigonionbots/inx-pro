@@ -23,7 +23,7 @@
 #include "images/AlignJustify.h"
 #include "images/AlignLeft.h"
 #include "images/AlignRight.h"
-#if FREEINK_DEVICE_X4PRO
+#if INX_HAS_FRONTLIGHT
 #include "images/Temp.h"
 #include "images/LightOff.h"
 #include "images/LightOn.h"
@@ -64,7 +64,7 @@ constexpr int selectorRows = 5;
 constexpr int selectorRowHeight = LIST_ITEM_HEIGHT;
 constexpr int standaloneRows = 5;
 constexpr int kBottomControlHeight = 140;
-#if FREEINK_DEVICE_X4PRO
+#if INX_HAS_FRONTLIGHT
 constexpr int kFrontlightRowHeight = kBottomControlHeight / 2;
 constexpr int kFrontlightCaretSize = 30;
 constexpr int kFrontlightCaretGap = 8;
@@ -815,7 +815,7 @@ void SettingsDrawer::drawMenuItems() {
   }
 }
 
-#if FREEINK_DEVICE_X4PRO
+#if INX_HAS_FRONTLIGHT
 namespace {
 int frontlightPercentFromTrack(const int x, const int left, const int width, const bool brightness) {
   const int clamped = std::max(left, std::min(left + width, x));
@@ -834,7 +834,7 @@ bool frontlightPointInCaret(const int x, const int y, const int caretX, const in
 #endif
 
 void SettingsDrawer::drawFrontlightBar() {
-#if FREEINK_DEVICE_X4PRO
+#if INX_HAS_FRONTLIGHT
   if (embedded_ || !frontlight.present()) return;
 
   const int barY = renderer.getScreenHeight() - kBottomControlHeight;
@@ -885,7 +885,7 @@ void SettingsDrawer::drawFrontlightBar() {
 }
 
 bool SettingsDrawer::handleFrontlightInput(MappedInputManager& input, const uint32_t currentTime) {
-#if FREEINK_DEVICE_X4PRO
+#if INX_HAS_FRONTLIGHT
   if (embedded_ || !frontlight.present()) return false;
 
   const int barY = renderer.getScreenHeight() - kBottomControlHeight;
