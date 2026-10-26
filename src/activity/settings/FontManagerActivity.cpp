@@ -609,6 +609,9 @@ void FontManagerActivity::loop() {
     return;
   }
 
+  // Leaving force-deletes the install task, which holds the SD lock for the whole download,
+  // and every later SD access then waits forever. Ignore input until the task finishes.
+  if (installTaskHandle_) return;
   if (SubPage::closeInput(renderer, mappedInput, goBack_, false)) return;
 
   if (state_ == State::Ready && !packages_.empty() && mappedInput.hasTouch()) {
