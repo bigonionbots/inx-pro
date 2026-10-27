@@ -44,6 +44,14 @@ class PluginManager {
     std::string groupField = "group";
   };
 
+  struct HomeWidgetLink {
+    std::string id;
+    std::string label;
+    std::string function;
+    /** Minutes between refreshes while the home screen is open; 0 refreshes only when the screen is drawn anew. */
+    int refreshMinutes = 1;
+  };
+
   using ProgressCallback = std::function<void(size_t downloaded, size_t total)>;
   using LuaArgumentPusher = std::function<void(lua_State* state)>;
 
@@ -70,6 +78,13 @@ class PluginManager {
   static bool invokeStringJson(const char* id, const char* function, const std::string& jsonArguments,
                                std::string& result, std::string& error);
 
+  /**
+   * Invoke a plugin function with a JSON object as its single Lua table argument and return its result as JSON.
+   * The function may return a table with string keys, which is converted to a JSON object, or JSON text.
+   */
+  static bool invokeJson(const char* id, const char* function, const std::string& jsonArguments,
+                         std::string& resultJson, std::string& error);
+
   /** Read a file shipped inside an installed plugin package. */
   static bool readFile(const char* id, const char* filename, std::string& contents, size_t maxBytes,
                        std::string& error);
@@ -79,6 +94,9 @@ class PluginManager {
 
   /** Find an installed plugin that contributes a next-book reader suggestion. */
   static bool findReaderSuggestionPlugin(ReaderSuggestionLink& link);
+
+  /** Find an installed plugin that contributes a home screen widget. */
+  static bool findHomeWidgetPlugin(HomeWidgetLink& link);
 
   /** Find an installed plugin that contributes an item to the library sidebar. */
   static bool findLibraryMenuPlugin(LibraryMenuLink& link);

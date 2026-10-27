@@ -18,7 +18,8 @@ HomeWidgetLayout::HomeWidgetLayout(GfxRenderer& renderer)
       favorites_(renderer),
       heatmap_(renderer),
       library_(renderer),
-      description_(renderer) {}
+      description_(renderer),
+      plugin_(renderer) {}
 
 void HomeWidgetLayout::render(const HomeTheme::Theme& theme, const int carouselIndex, const int favoriteIndex) const {
   switch (theme.layout) {
@@ -55,6 +56,7 @@ bool HomeWidgetLayout::needsRefresh(const HomeTheme::Theme& theme) const {
   for (int slot = 0; slot < HomeTheme::slotCount(theme.layout); ++slot) {
     if (theme.widgets[slot] == HomeTheme::Widget::Clock && clock_.needsRefresh()) return true;
     if (theme.widgets[slot] == HomeTheme::Widget::Calendar && calendar_.needsRefresh()) return true;
+    if (theme.widgets[slot] == HomeTheme::Widget::Plugin && plugin_.needsRefresh()) return true;
 #if FREEINK_DEVICE_STICKY
     if (theme.widgets[slot] == HomeTheme::Widget::Temperature && temperature_.needsRefresh()) return true;
     if (theme.widgets[slot] == HomeTheme::Widget::Humidity && humidity_.needsRefresh()) return true;
@@ -214,6 +216,9 @@ void HomeWidgetLayout::renderGrid(const HomeTheme::Theme& theme, const int carou
                             theme.carouselLabelColors[slot], theme.carouselShadowStyles[slot],
                             theme.descriptionTitles[slot] != 0, theme.descriptionAuthors[slot] != 0,
                             theme.descriptionProgress[slot] != 0, theme.descriptionRatings[slot] != 0);
+        break;
+      case HomeTheme::Widget::Plugin:
+        plugin_.render(bounds.x, bounds.y, bounds.width, bounds.height);
         break;
       case HomeTheme::Widget::Empty:
       default:

@@ -25,6 +25,7 @@ enum class Widget : uint8_t {
   Heatmap = 11,
   Library = 12,
   Description = 13,
+  Plugin = 14,
 };
 
 enum class HeatmapView : uint8_t {

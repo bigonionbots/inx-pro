@@ -8,6 +8,7 @@
 #include "../widget/Heatmap.h"
 #include "../widget/Humidity.h"
 #include "../widget/Library.h"
+#include "../widget/PluginWidget.h"
 #include "../widget/Recent.h"
 #include "../widget/Shortcut.h"
 #include "../widget/ShortcutList.h"
@@ -92,4 +93,5 @@ class HomeWidgetLayout final {
   Heatmap heatmap_;
   LibraryWidget library_;
   Description description_;
+  PluginWidget plugin_;
 };

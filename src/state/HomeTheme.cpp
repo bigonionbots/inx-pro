@@ -146,9 +146,7 @@ void ensureLoaded() {
 
 bool validLayout(const uint8_t value) { return value <= static_cast<uint8_t>(Layout::TwoByTwo); }
 
-bool validWidget(const uint8_t value) {
-  return value <= static_cast<uint8_t>(Widget::Description);
-}
+bool validWidget(const uint8_t value) { return value <= static_cast<uint8_t>(Widget::Plugin); }
 
 bool validBorder(const uint8_t value) {
   return value <= static_cast<uint8_t>(Border::Thick);
@@ -881,6 +879,8 @@ const char* widgetLabel(const Widget widget) {
       return "Library";
     case Widget::Description:
       return "Book Details";
+    case Widget::Plugin:
+      return "Plugin Widget";
     default:
       return "Unknown";
   }
