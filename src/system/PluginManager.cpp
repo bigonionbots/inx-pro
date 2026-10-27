@@ -727,6 +727,62 @@ bool PluginManager::invokeStringJson(const char* id, const char* function, const
                       result, error);
 }
 
+bool PluginManager::invokeJson(const char* id, const char* function, const std::string& jsonArguments,
+                               std::string& resultJson, std::string& error) {
+  resultJson.clear();
+  error.clear();
+  JsonDocument arguments;
+  if (jsonArguments.empty() || deserializeJson(arguments, jsonArguments) != DeserializationError::Ok ||
+      !arguments.is<JsonObject>()) {
+    error = "Plugin arguments must be a JSON object";
+    return false;
+  }
+  if (!id || !function || !safeId(id) || !SdMan.ready()) {
+    error = "Invalid Lua plugin request";
+    return false;
+  }
+  lua_State* state = loadPlugin(id, error);
+  if (!state) return false;
+
+  lua_getglobal(state, function);
+  if (!lua_isfunction(state, -1)) {
+    lua_pop(state, 1);
+    error = std::string("Lua function is missing: ") + function;
+    return false;
+  }
+  if (!pushJsonValue(state, arguments.as<JsonObjectConst>(), 0)) {
+    lua_pop(state, 1);
+    error = "Plugin arguments are too deeply nested";
+    return false;
+  }
+  if (lua_pcall(state, 1, 1, 0) != LUA_OK) {
+    const char* message = lua_tostring(state, -1);
+    error = message ? message : "Lua plugin call failed";
+    lua_pop(state, 1);
+    INX_SERIAL.printf("[LUA] plugin=%s function=%s error=%s\n", id, function, error.c_str());
+    return false;
+  }
+  if (lua_type(state, -1) == LUA_TSTRING) {
+    resultJson = lua_tostring(state, -1);
+    lua_pop(state, 1);
+    return true;
+  }
+  if (!lua_istable(state, -1)) {
+    lua_pop(state, 1);
+    error = "Lua plugin did not return a table";
+    return false;
+  }
+  JsonDocument result;
+  const bool converted = luaValueToJson(result.to<JsonObject>(), state, -1, 0);
+  lua_pop(state, 1);
+  if (!converted) {
+    error = "Lua plugin returned an unsupported value";
+    return false;
+  }
+  serializeJson(result, resultJson);
+  return true;
+}
+
 bool PluginManager::readFile(const char* id, const char* filename, std::string& contents, const size_t maxBytes,
                              std::string& error) {
   contents.clear();
@@ -781,6 +837,25 @@ bool PluginManager::findReaderSuggestionPlugin(ReaderSuggestionLink& link) {
     link.label = hook["label"] | "Open suggested book";
     link.function = candidateFunction;
     link.groupField = hook["group_field"] | "group";
+    return true;
+  });
+}
+
+bool PluginManager::findHomeWidgetPlugin(HomeWidgetLink& link) {
+  link = {};
+  if (!SdMan.ready()) return false;
+  SdIoMutex::Lock ioLock;
+  return forEachInstalledPlugin([&](const char* candidate) {
+    JsonDocument document;
+    if (!readInstalledManifest(candidate, document)) return false;
+    const JsonObject widget = document["home_widget"].as<JsonObject>();
+    const std::string function = widget["function"] | "";
+    if (function.empty()) return false;
+    link.id = candidate;
+    const std::string name = document["name"] | candidate;
+    link.label = widget["label"] | name;
+    link.function = function;
+    link.refreshMinutes = std::clamp(widget["refresh_minutes"] | 1, 0, 24 * 60);
     return true;
   });
 }

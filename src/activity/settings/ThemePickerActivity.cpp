@@ -83,12 +83,17 @@ void setDefaultLibraryFolders(char (&folders)[3][128]) {
   }
 }
 
+// Set on entry: the plugin widget is offered only while a plugin providing one is installed. It is left out
+// of sleep themes, which are drawn once and would show stale plugin text.
+bool gPluginWidgetOffered = false;
+
 int widgetOptionCount(const HomeTheme::Layout layout, const bool sleepTheme) {
   if (layout == HomeTheme::Layout::Classic) return 1;
+  const int pluginOption = !sleepTheme && gPluginWidgetOffered ? 1 : 0;
 #if FREEINK_DEVICE_STICKY
-  return sleepTheme ? 5 : 14;
+  return sleepTheme ? 5 : 14 + pluginOption;
 #else
-  return sleepTheme ? 3 : 12;
+  return sleepTheme ? 3 : 12 + pluginOption;
 #endif
 }
 
@@ -125,6 +130,7 @@ HomeTheme::Widget widgetOptionAt(const bool sleepTheme, const int index) {
   const HomeTheme::Widget* options = sleepTheme ? sleepOptions : homeOptions;
   const int optionCount = sleepTheme ? static_cast<int>(sizeof(sleepOptions) / sizeof(sleepOptions[0]))
                                      : static_cast<int>(sizeof(homeOptions) / sizeof(homeOptions[0]));
+  if (!sleepTheme && gPluginWidgetOffered && index == optionCount) return HomeTheme::Widget::Plugin;
   if (index < 0 || index >= optionCount) return HomeTheme::Widget::Empty;
   return options[index];
 }
@@ -212,6 +218,7 @@ void drawLibraryPreviewPlaceholders(GfxRenderer& renderer, const int x, const in
 void ThemePickerActivity::onEnter() {
   ActivityWithSubactivity::onEnter();
   HomeTheme::load();
+  gPluginWidgetOffered = plugin_.available();
   selected_ = openSleepTheme_ ? HomeTheme::count() : HomeTheme::activeIndex();
   screen_ = Screen::List;
   if (openSleepTheme_) {
@@ -426,6 +433,9 @@ void ThemePickerActivity::renderWidgetPreview(const HomeTheme::Widget widget, co
                           descriptionShowTitle, descriptionShowAuthor, descriptionShowProgress,
                           descriptionShowRating);
       break;
+    case HomeTheme::Widget::Plugin:
+      plugin_.render(x, y, width, height);
+      break;
     case HomeTheme::Widget::Empty:
     default:
       renderer.rectangle.fill(x, y, width, height, false);
@@ -450,7 +460,8 @@ void ThemePickerActivity::renderWidgetPopup() {
   std::vector<std::string> values;
   values.reserve(static_cast<size_t>(options));
   for (int i = 0; i < options; ++i) {
-    values.emplace_back(HomeTheme::widgetLabel(widgetOptionAt(editingSleep_, i)));
+    const HomeTheme::Widget widget = widgetOptionAt(editingSleep_, i);
+    values.emplace_back(widget == HomeTheme::Widget::Plugin ? plugin_.label() : HomeTheme::widgetLabel(widget));
   }
   const PopUpBounds box = PopUp::bounds(renderer, options);
   PopUp::background(renderer, box);

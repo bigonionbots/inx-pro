@@ -18,6 +18,7 @@
 #include "activity/page/components/widget/Heatmap.h"
 #include "activity/page/components/widget/Library.h"
 #include "activity/page/components/widget/Description.h"
+#include "activity/page/components/widget/PluginWidget.h"
 #include "state/HomeTheme.h"
 
 class ThemePickerActivity final : public ActivityWithSubactivity {
@@ -28,7 +29,7 @@ class ThemePickerActivity final : public ActivityWithSubactivity {
         shortcutList_(renderer), clock_(renderer), calendar_(renderer), recent_(renderer), temperature_(renderer),
         humidity_(renderer), todaysReading_(renderer),
         favorites_(renderer), heatmap_(renderer), library_(renderer), description_(renderer),
-        onBack_(std::move(onBack)), openSleepTheme_(openSleepTheme) {}
+        plugin_(renderer), onBack_(std::move(onBack)), openSleepTheme_(openSleepTheme) {}
 
   void onEnter() override;
   void loop() override;
@@ -84,6 +85,7 @@ class ThemePickerActivity final : public ActivityWithSubactivity {
   Heatmap heatmap_;
   LibraryWidget library_;
   Description description_;
+  PluginWidget plugin_;
   std::function<void()> onBack_;
 
   void render();
