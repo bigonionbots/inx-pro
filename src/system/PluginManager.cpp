@@ -210,12 +210,14 @@ bool luaValueToJson(JsonVariant target, lua_State* state, const int index, const
       const int absoluteIndex = lua_absindex(state, index);
       lua_pushnil(state);
       while (lua_next(state, absoluteIndex) != 0) {
-        if (!lua_isstring(state, -2)) {
+        // Only string keys: lua_tostring on a numeric key converts it in place and breaks lua_next.
+        if (lua_type(state, -2) != LUA_TSTRING) {
           lua_pop(state, 2);
           return false;
         }
         const char* key = lua_tostring(state, -2);
-        if (!key || !luaValueToJson(object[key], state, -1, depth + 1)) {
+        // to<JsonVariant>() creates the member; converting object[key] to JsonVariant does not.
+        if (!key || !luaValueToJson(object[key].to<JsonVariant>(), state, -1, depth + 1)) {
           lua_pop(state, 2);
           return false;
         }
