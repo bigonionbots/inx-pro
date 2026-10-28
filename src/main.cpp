@@ -46,6 +46,11 @@
 #include "activity/util/FullScreenMessageActivity.h"
 #include "state/ReaderSetting.h"
 #include "state/SystemSetting.h"
+#if INX_HAS_AUDIO_MODULE
+#include "system/AudioLink.h"
+#include "system/AudioModule.h"
+#include "system/AudioPlayer.h"
+#endif
 #include "system/FontManager.h"
 #include "system/Frontlight.h"
 #include "system/Fonts.h"
@@ -324,6 +329,11 @@ void waitForPowerRelease() {
 }
 
 void enterDeepSleep() {
+#if INX_HAS_AUDIO_MODULE
+  AudioPlayer::shutdown();
+  // The charger keeps boosting through deep sleep, so the module would drain the battery.
+  AudioModule::shutdown();
+#endif
   switchTo<SleepActivity>(render, input);
   display.deepSleep();
   SdMan.shutdown();
@@ -373,10 +383,19 @@ void setup() {
 
   sdCardAvailable = SdMan.begin();
 
+#if INX_HAS_AUDIO_MODULE
+  AudioModule::begin();
+  AudioLink::begin();
+  AudioPlayer::begin();
+#endif
+
   setupDisplayAndFonts();
 
   switch (gpio.getWakeupReason()) {
     case HalGPIO::WakeupReason::AfterUSBPower:
+#if INX_HAS_AUDIO_MODULE
+      AudioModule::shutdown();
+#endif
       display.deepSleep();
       SdMan.shutdown();
       gpio.startDeepSleep();
@@ -427,12 +446,22 @@ void loop() {
                    powerReleased ? 1 : 0, currentActivity ? currentActivity->getName() : "none");
   }
 
+#if INX_HAS_AUDIO_MODULE
+  AudioModule::service();
+  AudioPlayer::service();
+#endif
+
   LibraryIndexRefresh::render(renderer);
   LibraryIndexRefresh::finish(renderer, currentActivity);
   static unsigned long lastActivityTime = millis();
 
   const bool inputActivity = gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity();
-  if (inputActivity || (currentActivity && currentActivity->preventAutoSleep())) {
+  bool keepAwake = inputActivity || (currentActivity && currentActivity->preventAutoSleep());
+#if INX_HAS_AUDIO_MODULE
+  // An audiobook keeps playing in the background while reading.
+  keepAwake = keepAwake || AudioPlayer::keepAwake();
+#endif
+  if (keepAwake) {
     lastActivityTime = millis();
   }
 

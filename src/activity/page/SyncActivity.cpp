@@ -10,6 +10,10 @@
 #include <GfxRenderer.h>
 
 #include "activity/network/BackupRestoreActivity.h"
+#if INX_HAS_AUDIO_MODULE
+#include "activity/settings/AudioModuleActivity.h"
+#include "activity/settings/AudioPlayerActivity.h"
+#endif
 #include "activity/settings/DeviceInfoActivity.h"
 #include "activity/settings/DictionaryPickerActivity.h"
 #include "activity/settings/KOReaderSettingsActivity.h"
@@ -21,10 +25,18 @@
 extern void onGoToHome();
 
 namespace {
+#if INX_HAS_AUDIO_MODULE
+constexpr int menuItemCount = 11;
+#else
 constexpr int menuItemCount = 9;
+#endif
 const char* menuItems[menuItemCount] = {"Manage via wifi",   "Calibre File Transfer", "Create hotspot",
                                         "OPDS Browser",      "Backup and restore", "KOReader Sync",
-                                        "Check for updates", "Choose dictionary",  "Device Information"};
+                                        "Check for updates", "Choose dictionary",  "Device Information",
+#if INX_HAS_AUDIO_MODULE
+                                        "Audio Module",      "Audiobooks",
+#endif
+};
 constexpr int listItemHeight = UiLayout::LIST_ITEM_HEIGHT;
 constexpr int headerTop = 20;
 constexpr int headerHeight = 40;
@@ -125,6 +137,22 @@ void SyncActivity::loop() {
       }));
       return;
     }
+#if INX_HAS_AUDIO_MODULE
+    if (selectedIndex == 9) {
+      enter(new AudioModuleActivity(renderer, mappedInput, [this] {
+        exit();
+        updateRequired = true;
+      }));
+      return;
+    }
+    if (selectedIndex == 10) {
+      enter(new AudioPlayerActivity(renderer, mappedInput, [this] {
+        exit();
+        updateRequired = true;
+      }));
+      return;
+    }
+#endif
 
     if (onModeSelected) onModeSelected(mode);
     return;

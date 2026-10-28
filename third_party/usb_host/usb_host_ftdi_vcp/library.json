@@ -1,0 +1,14 @@
+{
+  "name": "usb_host_ftdi_vcp",
+  "version": "2.1.1",
+  "description": "Espressif USB Host ftdi virtual COM port driver (vendored ESP-IDF component, unmodified sources)",
+  "license": "Apache-2.0",
+  "platforms": "espressif32",
+  "dependencies": [{"name": "usb_host_cdc_acm"}],
+  "build": {
+    "srcDir": ".",
+    "srcFilter": ["+<*.c>"],
+    "includeDir": "include",
+    "flags": ["-I../usb_host_cdc_acm/include", "-I../usb_host_cdc_acm/interface"]
+  }
+}

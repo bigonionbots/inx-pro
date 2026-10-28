@@ -14,6 +14,7 @@ Hardware access goes through the `freeink-sdk` git submodule. Leave it unmodifie
 pio run -e sticky                     # default env (default_envs = sticky)
 pio run -e x4pro
 pio run -e t5s3
+pio run -e t5s3_audio                 # t5s3 + external USB-C audio module (docs/audio-module.md)
 pio run -e sticky -t upload
 pio run -e x4pro -t flashall --upload-port /dev/...   # full image: bootloader + partitions + OTA + app
 pio run -e x4pro -t upload --upload-port /dev/...     # app only
@@ -99,6 +100,21 @@ Firmware caches heavy work on the SD card instead of in RAM:
 Large buffers go in the 8 MB octal PSRAM (see `PsramAllocator.h`; framebuffers use `FREEINK_FB_PSRAM`). SD access from multiple tasks is guarded by `util/SdIoMutex`.
 
 If you change a cached binary format, check the documented layouts and version numbers in `docs/file-formats.md` (for example `book.bin` v3), and bump the version so stale caches are rebuilt.
+
+### External audio module (`t5s3_audio` only)
+
+`-DINX_HAS_AUDIO_MODULE=1` compiles everything audio:
+- `src/system/{Bq25896,UsbSerialHost,AudioModule,AudioLink,AudioPlayer}`
+- `src/audio/` (MP3 and MP4/AAC readers)
+- `AudioModuleActivity` / `AudioPlayerActivity` (Device Management)
+
+Everything is `#if`-guarded, so other envs and the simulator see empty files.
+
+The T5 powers an ATOM Lite through the BQ25896 OTG boost and runs the S3 as a USB host to its USB-UART bridge. The ESP-IDF class drivers for that are vendored unmodified in `third_party/usb_host/`. They are added as `symlink://` lib_deps only in this env, and `third_party/.clang-format` disables formatting there.
+
+The two firmwares speak `shared/audio_link/AudioLinkProtocol.h`, which both include verbatim, so change it in lockstep with `audio-module/` (a separate PlatformIO project). The player reads the SD card only on the main loop, into a PSRAM queue that a sender task drains, because SdFat is not thread-safe and most reader I/O does not lock `SdIoMutex`.
+
+Read `docs/audio-module.md` before touching the power or link code. It covers three traps: the charger's `OTG_CONFIG` resets to 1 and its I2C watchdog restores defaults; starting the USB host takes the USB-Serial-JTAG console away until reboot; and the ATOM Lite's emulated FTDI bridge only works at some baud rates.
 
 ### Web server
 

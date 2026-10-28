@@ -1,0 +1,12 @@
+dependencies:
+  espressif/usb_host_cdc_acm:
+    public: true
+    version: ^2.3.0
+description: USB Host driver for FTDI USB<->UART converters series of chips
+issues: https://github.com/espressif/esp-usb/issues
+repository: git://github.com/espressif/esp-usb.git
+repository_info:
+  commit_sha: cb8e2bd4551b4ec5693ae2b14175e5f99722456e
+  path: host/class/cdc/usb_host_ftdi_vcp
+url: https://github.com/espressif/esp-usb/tree/master/host/class/cdc/usb_host_ftdi_vcp
+version: 2.1.1
