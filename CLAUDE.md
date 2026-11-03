@@ -38,10 +38,11 @@ PR titles must follow Conventional Commits (`feat:`, `fix:`, `chore:` …). A se
 
 ### Tests
 
-The only automated test is a standalone hyphenation evaluation. It builds with the host `c++`, not PlatformIO:
+Two standalone tests build with the host compilers, not PlatformIO:
 
 ```sh
-test/run_hyphenation_eval.sh [args]   # compiles into build/hyphenation_eval/ and runs it
+test/run_hyphenation_eval.sh [args]   # hyphenation evaluation; compiles into build/hyphenation_eval/
+test/run_gb_host_test.sh              # Game Boy core (acid2 test ROMs) and game video row logic; build/gb_host/
 ```
 
 ## Architecture
@@ -65,6 +66,7 @@ test/run_hyphenation_eval.sh [args]   # compiles into build/hyphenation_eval/ an
 Other generators:
 - `scripts/generate_hyphenation_trie.py` produces `lib/Epub/Epub/hyphenation/generated/hyph-*.trie.h`. The format is described in `docs/hyphenation-trie-format.md`.
 - `fontcon/fontconvert.py` and `scripts/regenerate_bundled_fonts.py` generate the bundled fonts.
+- `scripts/make_game_overlay_template.py` produces the game overlay template (`docs/games/overlay-template.png` and `src/games/generated/OverlayTemplatePng.h`) from `src/games/GameUi.h`.
 
 ### Activities (UI)
 
@@ -115,7 +117,7 @@ The T5 powers an ATOM Lite through the BQ25896 OTG boost and runs the S3 as a US
 
 The two firmwares speak `shared/audio_link/AudioLinkProtocol.h`, which both include verbatim, so change it in lockstep with `audio-module/` (a separate PlatformIO project). The player reads the SD card only on the main loop, into a PSRAM queue that a sender task drains, because SdFat is not thread-safe and most reader I/O does not lock `SdIoMutex`. Network work (streaming, sync, downloads) runs on tasks that never touch the SD card; anything that must reach the card (downloaded chunks, rotated tokens) is handed to a main-loop `service()`.
 
-Games (`-DINX_HAS_GAMES=1`, also only in `t5s3_audio`; `docs/games.md`) run in a separate boot: `GameMode` records the launch in RTC memory and restarts, and `setup()` hands the panel to FastEPD (`third_party/FastEPD`, vendored and patched) before the SDK display starts, because the SDK cannot share its panel. Keep the games stack MIT/Apache: InkDeck's integration is AGPL and Nofrendo ships under GPL-2.0, so neither may be copied in.
+Games (`-DINX_HAS_GAMES=1`, also only in `t5s3_audio`; `docs/games.md`) run in a separate boot: `GameMode` records the launch in RTC memory and restarts, and `setup()` hands the panel to FastEPD (`third_party/FastEPD`, vendored and patched) before the SDK display starts, because the SDK cannot share its panel. In a game, `GameVideo` scans the panel continuously from a core-0 task; draw into FastEPD's buffer and call `GameVideo::markRows()` instead of FastEPD's update calls. The Game Boy core is CrankBoy's, vendored unmodified in `third_party/crankboy` behind a shim (`VENDORED.md`); C++ reaches it only through `src/games/gb/GbSession.h`. Keep the games stack MIT/Apache: InkDeck's integration is AGPL, Nofrendo ships under GPL-2.0, and T5S3-GameBoy has no licence, so none of them may be copied in.
 
 Read `docs/audio-module.md` before touching the power or link code. It covers three traps: the charger's `OTG_CONFIG` resets to 1 and its I2C watchdog restores defaults; starting the USB host takes the USB-Serial-JTAG console away until reboot; and the ATOM Lite's emulated FTDI bridge only works at some baud rates.
 

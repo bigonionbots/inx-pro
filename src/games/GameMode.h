@@ -23,8 +23,8 @@ constexpr const char* ROMS_DIRECTORY = "/Games";
 /** A game launch is waiting for this boot. */
 bool pending();
 
-/** Restarts into the panel and touch test (milestone 1 of the game work). */
-[[noreturn]] void launchDisplayTest();
+/** Restarts into a game: a .gb / .gbc ROM path on the SD card. */
+[[noreturn]] void launchGame(const char* romPath);
 
 /** Runs the pending launch. Call from setup() after gpio and SD, before the SDK display. */
 [[noreturn]] void run();

@@ -16,3 +16,7 @@ Used by the `t5s3_audio` env's game mode (`src/games/`) to drive the LilyGo T5 S
   bus and no buffers. A custom panel that passes no gray matrix gets FastEPD's ED047TC1-class
   `u8M5Matrix`, since the built-in matrices are not reachable from outside the file. The H752-01 board support itself lives in inx-pro (`src/games/GameDisplay.cpp`),
   built on freeink-sdk's power hooks.
+- `FASTEPD::rowControl()`, `FASTEPD::writeRow()` and `FASTEPD::dmaBuffer()` (src/FastEPD.h,
+  src/FastEPD.cpp) expose the file-local `bbepRowControl()` / `bbepWriteRow()` and the DMA row
+  buffer, so inx-pro's game video (`src/games/GameVideo.cpp`) can run its own continuous
+  per-pixel scan on the ESP32-S3. FastEPD's own `videoUpdate()` only builds on Linux (NEON).

@@ -9,13 +9,17 @@ inx-pro is MIT, and the games feature keeps it that way: every component is MIT 
 
 | Part | Component | License | Notes |
 | --- | --- | --- | --- |
-| GB / GBC core | CrankBoy's Peanut-GB (`libs/peanut_gb.h`, `peanut_gb_core.h`, `pgb/`) | MIT | Supports GBC; SameBoy-derived parts are MIT too. It needs a small shim for its Playdate app headers. |
-| GB sound | MiniGB APU (from CrankBoy) | MIT | |
+| GB / GBC core | CrankBoy's Peanut-GB, vendored in `third_party/crankboy` (VENDORED.md) | MIT | Supports GBC; SameBoy-derived parts are MIT too. inx-pro's shim stands in for its Playdate app headers. |
+| GB sound | MiniGB APU (from CrankBoy) | MIT | Built, not played yet (milestone 4). |
 | NES core | [agnes](https://github.com/kgabis/agnes) | MIT | Mappers 0, 1, 2, 4 (NROM, MMC1, UxROM, MMC3). 3 and 7 to be added. No APU. |
-| Panel driver | [FastEPD](https://github.com/bitbank2/FastEPD) | Apache-2.0 | Vendored in `third_party/FastEPD` with one patch (PATCHES.md). |
+| Panel driver | [FastEPD](https://github.com/bitbank2/FastEPD) | Apache-2.0 | Vendored in `third_party/FastEPD` with two patches (PATCHES.md). |
 | H752-01 board support | `src/games/GameDisplay.cpp` | MIT | Built on freeink-sdk's own power hooks. |
 
 Not used, and why:
+- **T5S3-GameBoy** (ShallowGreen123) runs the same CrankBoy core on this board family, but the
+  repository has no licence, so none of its code is used. Its display approach (a continuous
+  scan with per-pixel drive counters, which FastEPD's Linux `videoUpdate()` also uses) is
+  re-implemented independently in `GameVideo`.
 - **InkDeck / Book32** integration code is AGPL-3.0, which would turn the firmware into AGPL.
   Its FastEPD video additions (`InkDeck*Video.h`) and its LilyGo display glue are part of that
   code.
@@ -42,29 +46,71 @@ and cannot hand the bus over and take it back. So games run in a **separate boot
 Touch uses the GT911 multi-touch snapshot (`HalGPIO::touchSnapshot()`), so a direction and a
 button can be held together.
 
+### Video
+
+FastEPD's partial update runs four full panel scans and a clearing scan for every update, so
+the milestone 1 test managed about 8 fps. Games use `GameVideo` instead:
+- a task on core 0 scans the panel continuously;
+- each scan compares the frame buffer with what each pixel is being driven to; a changed pixel
+  is driven for 4 scans towards its new colour, then left alone (`GameVideoRow.h`, 3-bit
+  counters in bit planes);
+- rows with nothing changed or settling get an all-zero row, which is cheap.
+
+Drawing and refreshing overlap: the game draws a frame whenever it likes, marks the rows it
+changed, and the next scan picks them up.
+
+### Game Boy
+
+`GameBoy.cpp` loads the ROM (up to 4 MB) into PSRAM and runs the core through a small C
+interface (`gb/GbSession.h`). Colour games run in Color mode, and the core turns their colours
+into four greys. Each frame is drawn 3x (480 x 432) with a 2x2 dither, and only the rows that
+changed are marked. Controls: an 8-way D-pad on the left, A and B on the right (touching
+between them presses both), SELECT and START under the game. Battery saves go next to the ROM
+as `<name>.sav` (the usual raw format), written 3 s after the game stops writing and on exit.
+
+### Overlays
+
+An overlay is a 960 x 540 PNG in `/Games/Overlays` that changes how the game screen looks. It
+never changes what the screen does: the touch areas stay put. Choose one with the Overlay button
+at the top of the Games screen (stored in `/Games/.overlay`).
+
+- Pixels at least 50% opaque are drawn: dark ones black, light ones white, greys as a 4x4
+  dither. More transparent pixels leave the normal screen showing.
+- The game screen (480 x 432 at 240, 54) always shows the game; the overlay is not drawn there.
+- The LIGHT readout and the status line are redrawn while playing, and the overlay is drawn
+  over them again each time, so covering them hides them.
+
+**Template.** The Games screen writes `/Games/Overlays/Template.png` when it is missing (also in
+the repository as `docs/games/overlay-template.png`). It marks the game screen, the top-bar
+buttons, the D-pad, A and B with their touch reach, and SELECT / START. Everything in it is 40%
+opaque, so the template itself draws nothing: paint opaque artwork over the guides, save as PNG
+under a new name, and pick it. Because the template draws nothing, choosing it looks the same as
+None. `Example.png` (`docs/games/overlay-example.png`) is written next to it: a finished overlay
+on the same layout, to see one working. `scripts/make_game_overlay_template.py` regenerates both
+PNGs and the firmware's copy (`src/games/generated/OverlayTemplatePng.h`) from the positions in
+`src/games/GameUi.h`; rerun it after moving a control.
+
+`OverlayPng.cpp` decodes the PNG (any colour type, 8 or 16 bits, palettes, tRNS; not interlaced)
+into two 1-bit planes when the game starts.
+
+### Host tests
+
+`test/run_gb_host_test.sh` builds the core on the PC, runs dmg-acid2 and cgb-acid2 (MIT test
+ROMs, downloaded on first run) and checks dmg-acid2 against its reference image. It also tests
+the per-pixel drive logic and the overlay PNG decoder (the template must draw nothing; RGBA,
+grey + alpha and palette test images must decode as expected).
+
 Game mode never reaches BootActivity, so `GameLight` applies the saved frontlight setting on entry.
 Changes made in game are written back when leaving, so the reader comes back at the same level.
 
 ## Milestones
 
-1. **Panel and touch test** (done, needs a hardware check): Home -> Shortcuts -> Games -> Display
-   and touch test.
-2. **Game Boy / Color**:
-   - the core with its shim, verified on the host against the MIT test ROMs dmg-acid2 and
-     cgb-acid2;
-   - then on the device: ROM library, 3x scaled dithered video, touch controls and battery saves.
+1. **Panel and touch test** (done; the test screen has since been removed).
+2. **Game Boy / Color** (done, checked on the device with Game Boy games; Color untested):
+   - the core with its shim, verified on the host against dmg-acid2 and cgb-acid2 (done);
+   - on the device: ROM list, 3x dithered video on the continuous scan, touch controls and
+     battery saves.
 3. **NES** with agnes (+ mappers 3 and 7).
 4. **Speed and sound**:
    - frame pacing and partial-update tuning;
    - game audio through the external audio module (needs a raw PCM path on the ATOM).
-
-## Milestone 1 test
-
-The test screen:
-- shows the four Game Boy shades as dither patches;
-- bounces a block inside a 480 x 432 frame (a Game Boy screen at 3x);
-- draws a circle under every finger.
-
-Every 8 s the bottom line reports the partial-update time, alternating between updating only the
-rows the block moves through and updating the whole game area. The top bar has LIGHT (on/off,
-with the level), `-` and `+` for the frontlight. EXIT (top right) or the power button returns.

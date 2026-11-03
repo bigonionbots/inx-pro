@@ -371,6 +371,11 @@ class FASTEPD
     uint8_t *previousBuffer(void) { return _state.pPrevious;}
     uint8_t *currentBuffer(void) { return _state.pCurrent;}
     uint8_t *tempBuffer(void) { return _state.pTemp;}
+    // inx-pro patch: row-level access for an external scan loop (see PATCHES.md).
+    // writeRow() sends native_width/4 bytes of 2-bit drive codes from a DMA-capable buffer.
+    void rowControl(int iType);
+    void writeRow(uint8_t *pData, bool bRowStep);
+    uint8_t *dmaBuffer(void) { return _state.dma_buf;}
     int einkPower(int bOn);
     void deInit(void);
     int fullUpdate(void);

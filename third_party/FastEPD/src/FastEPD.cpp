@@ -373,6 +373,18 @@ void FASTEPD::drawPixel(int x, int y, uint8_t color)
 {
     (*_state.pfnSetPixel)(&_state, x, y, color);
 }
+#ifndef __LINUX__
+// inx-pro patch: row-level access for an external scan loop (see PATCHES.md).
+void FASTEPD::rowControl(int iType)
+{
+    bbepRowControl(&_state, iType);
+}
+void FASTEPD::writeRow(uint8_t *pData, bool bRowStep)
+{
+    bbepWriteRow(&_state, pData, _state.native_width / 4, bRowStep ? 1 : 0);
+}
+#endif // !__LINUX__
+
 void FASTEPD::drawPixelFast(int x, int y, uint8_t color)
 {
     (*_state.pfnSetPixelFast)(&_state, x, y, color);
