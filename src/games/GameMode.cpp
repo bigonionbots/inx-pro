@@ -18,6 +18,7 @@
 #include <cstring>
 
 #include "GameDisplay.h"
+#include "GameLight.h"
 
 extern HalGPIO gpio;
 
@@ -81,6 +82,12 @@ constexpr int BLOCK = 48;
 constexpr int EXIT_X = 840;
 constexpr int EXIT_W = 120;
 constexpr int EXIT_H = 54;
+// Frontlight controls in the top bar, left of EXIT.
+constexpr int LIGHT_X = 480;
+constexpr int LIGHT_W = 120;
+constexpr int DIM_X = 610;
+constexpr int BRIGHT_X = 725;
+constexpr int STEP_W = 105;
 constexpr uint32_t PHASE_MS = 8000;
 
 void text(FASTEPD& epd, const int x, const int y, const char* s) {
@@ -99,16 +106,46 @@ void ditherRect(FASTEPD& epd, const int x0, const int y0, const int w, const int
   }
 }
 
+enum class BarButton : uint8_t { None, Light, Dimmer, Brighter, Exit };
+
+BarButton barButtonAt(const Contact& c) {
+  if (c.y >= EXIT_H) return BarButton::None;
+  if (c.x >= EXIT_X) return BarButton::Exit;
+  if (c.x >= BRIGHT_X && c.x < BRIGHT_X + STEP_W) return BarButton::Brighter;
+  if (c.x >= DIM_X && c.x < DIM_X + STEP_W) return BarButton::Dimmer;
+  if (c.x >= LIGHT_X && c.x < LIGHT_X + LIGHT_W) return BarButton::Light;
+  return BarButton::None;
+}
+
+/** Redraws the LIGHT button's readout (OFF or the percentage). The caller pushes the top bar. */
+void drawLightButton(FASTEPD& epd) {
+  epd.fillRect(LIGHT_X + 1, 1, LIGHT_W - 2, EXIT_H - 2, BBEP_WHITE);
+  text(epd, LIGHT_X + 30, 6, "LIGHT");
+  char value[8];
+  if (GameLight::isOn()) {
+    std::snprintf(value, sizeof(value), "%u%%", static_cast<unsigned>(GameLight::percent()));
+  } else {
+    std::snprintf(value, sizeof(value), "OFF");
+  }
+  text(epd, LIGHT_X + (LIGHT_W - 12 * static_cast<int>(std::strlen(value))) / 2, 30, value);
+}
+
 [[noreturn]] void runDisplayTest() {
   FASTEPD& epd = GameDisplay::epd();
   epd.setFont(FONT_12x16);
   epd.fillScreen(BBEP_WHITE);
-  text(epd, 8, 8, "Game display test. Touch anywhere: every finger is marked.");
+  text(epd, 8, 8, "Game display test");
+  text(epd, 8, 30, "Top-left corner. Fingers are marked.");
+  epd.drawRect(LIGHT_X, 0, LIGHT_W, EXIT_H, BBEP_BLACK);
+  drawLightButton(epd);
+  epd.drawRect(DIM_X, 0, STEP_W, EXIT_H, BBEP_BLACK);
+  text(epd, DIM_X + 46, 18, "-");
+  epd.drawRect(BRIGHT_X, 0, STEP_W, EXIT_H, BBEP_BLACK);
+  text(epd, BRIGHT_X + 46, 18, "+");
   epd.drawRect(EXIT_X, 0, EXIT_W, EXIT_H, BBEP_BLACK);
   text(epd, EXIT_X + 30, 18, "EXIT");
   epd.drawRect(AREA_X - 1, AREA_Y - 1, AREA_W + 2, AREA_H + 2, BBEP_BLACK);
   for (int shade = 0; shade < 4; ++shade) ditherRect(epd, AREA_X + shade * 120, AREA_Y, 120, 40, shade);
-  text(epd, 8, 30, "Top-left corner of the panel");
   epd.fullUpdate(CLEAR_FAST, true);
 
   int bx = AREA_X + 10, by = AREA_Y + 60, dx = 6, dy = 4;
@@ -118,16 +155,34 @@ void ditherRect(FASTEPD& epd, const int x0, const int y0, const int w, const int
   char line[96];
   Contact marks[InputManager::MAX_TOUCH_CONTACTS] = {};
   int markCount = 0;
+  BarButton held = BarButton::None;  // bar buttons act once per press, not every frame
 
   for (;;) {
     gpio.update();
     if (gpio.wasPressed(HalGPIO::BTN_POWER)) exitToReader();
 
+    Contact touched[InputManager::MAX_TOUCH_CONTACTS];
+    const int touchedCount = contacts(touched, InputManager::MAX_TOUCH_CONTACTS);
+    BarButton pressed = BarButton::None;
     Contact now[InputManager::MAX_TOUCH_CONTACTS];
-    const int n = contacts(now, InputManager::MAX_TOUCH_CONTACTS);
-    for (int i = 0; i < n; ++i) {
-      if (now[i].x >= EXIT_X && now[i].y < EXIT_H) exitToReader();
+    int n = 0;
+    for (int i = 0; i < touchedCount; ++i) {
+      const BarButton button = barButtonAt(touched[i]);
+      if (button != BarButton::None) {
+        pressed = button;
+      } else if (touched[i].y >= EXIT_H + 19) {
+        now[n++] = touched[i];  // marks stay clear of the bar
+      }
     }
+    if (pressed != held && pressed != BarButton::None) {
+      if (pressed == BarButton::Exit) exitToReader();
+      if (pressed == BarButton::Light) GameLight::toggle();
+      if (pressed == BarButton::Dimmer) GameLight::step(false);
+      if (pressed == BarButton::Brighter) GameLight::step(true);
+      drawLightButton(epd);
+      epd.partialUpdate(true, 0, EXIT_H);
+    }
+    held = pressed;
 
     // Erase old finger marks, draw new ones (outside the game area they cost a partial update too).
     for (int i = 0; i < markCount; ++i) epd.fillCircle(marks[i].x, marks[i].y, 18, BBEP_WHITE);
@@ -141,7 +196,7 @@ void ditherRect(FASTEPD& epd, const int x0, const int y0, const int w, const int
       touchTop = std::min(touchTop, now[i].y - 19);
       touchBottom = std::max(touchBottom, now[i].y + 19);
     }
-    std::memcpy(marks, now, sizeof(marks));
+    std::copy(now, now + n, marks);
     markCount = n;
 
     // Move the block.
@@ -203,6 +258,7 @@ void run() {
     delay(1000);
     exitToReader();
   }
+  GameLight::restore();
   switch (launch.kind) {
     case Kind::DisplayTest:
     default:
@@ -211,6 +267,7 @@ void run() {
 }
 
 void exitToReader() {
+  GameLight::save();
   GameDisplay::end();
   launchRecord.magic = 0;
   esp_restart();

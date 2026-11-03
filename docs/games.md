@@ -42,6 +42,9 @@ and cannot hand the bus over and take it back. So games run in a **separate boot
 Touch uses the GT911 multi-touch snapshot (`HalGPIO::touchSnapshot()`), so a direction and a
 button can be held together.
 
+Game mode never reaches BootActivity, so `GameLight` applies the saved frontlight setting on entry.
+Changes made in game are written back when leaving, so the reader comes back at the same level.
+
 ## Milestones
 
 1. **Panel and touch test** (done, needs a hardware check): Home -> Shortcuts -> Games -> Display
@@ -63,5 +66,5 @@ The test screen:
 - draws a circle under every finger.
 
 Every 8 s the bottom line reports the partial-update time, alternating between updating only the
-rows the block moves through and updating the whole game area. EXIT (top right) or the power
-button returns.
+rows the block moves through and updating the whole game area. The top bar has LIGHT (on/off,
+with the level), `-` and `+` for the frontlight. EXIT (top right) or the power button returns.
