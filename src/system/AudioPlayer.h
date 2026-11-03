@@ -5,19 +5,25 @@
  * @brief Audiobook playback from the SD card through the external audio module.
  *
  * A book is an audio file (.m4b / .m4a / .mp4 / .mp3) or a folder of them (played in natural name
- * order) under /Audiobooks. Progress (track and position) is kept per book in
- * /.system/audio_progress.txt.
+ * order) under /Audiobooks, or an Audiobookshelf item streamed over Wi-Fi (openRemote()). Folders
+ * downloaded from Audiobookshelf carry an AbsLocal `.abs.json` and play in the server's order.
+ * Progress (track and position) is kept per book in /.system/audio_progress.txt; Audiobookshelf
+ * books share theirs between the downloaded and the streamed copy and sync it with the server.
  *
  * Threading: everything here runs on the main loop task. service() reads the SD card (holding
  * SdIoMutex) in short slices into a large PSRAM queue, so file access never races the reader's SD
  * use. A sender task drains that queue into AudioLink, which blocks on the module's buffer credit,
  * and touches neither the card nor this module's state. The queue holds about a minute of audio,
- * which rides out long main-loop stalls such as EPUB page layout.
+ * which rides out long main-loop stalls such as EPUB page layout. Streamed tracks are read by a
+ * feeder task instead (HTTP only, no SD), and progress sync runs on a task of its own; both hand
+ * their results to service().
  */
 
 #if INX_HAS_AUDIO_MODULE
 
 #include <AudioLinkProtocol.h>
+
+#include "abs/AbsClient.h"
 
 #include <cstdint>
 #include <string>
@@ -31,12 +37,14 @@ struct Book {
   std::string path;
   std::string title;
   bool folder = false;
+  std::string absItemId;  ///< set for Audiobookshelf books (downloaded or streamed)
 };
 
 struct View {
   bool open = false;
   bool paused = false;
   bool finished = false;
+  bool remote = false;  ///< streaming from Audiobookshelf
   /** Module not connected or not answering yet; playback resumes by itself when it is. */
   bool waitingForModule = false;
   std::string title;
@@ -57,6 +65,8 @@ struct View {
 void begin();
 
 std::vector<Book> listBooks();
+/** Streams an Audiobookshelf item over Wi-Fi from its saved (and synced) position. */
+bool openRemote(const Abs::ItemDetail& item);
 /** Opens a book at its saved position and starts playing. Turns the module link and power on. */
 bool open(const Book& book);
 void stop();

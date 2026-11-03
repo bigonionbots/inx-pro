@@ -18,6 +18,8 @@
 #include "system/MappedInputManager.h"
 #include "system/UiLayout.h"
 
+extern void onGoToAudiobookshelf();
+
 namespace {
 
 constexpr int MARGIN = 20;
@@ -213,6 +215,9 @@ void AudioPlayerActivity::run(const Action action, const int index) {
     case Action::ShowOutput:
       showView(View::Output);
       return;
+    case Action::ShowAudiobookshelf:
+      onGoToAudiobookshelf();
+      return;
     case Action::OpenBook:
       if (index >= 0 && index < static_cast<int>(books.size())) {
         AudioPlayer::open(books[index]);
@@ -222,7 +227,7 @@ void AudioPlayerActivity::run(const Action action, const int index) {
       break;
     case Action::BooksPageUp:
     case Action::BooksPageDown: {
-      const int rows = std::max(1, (renderer.getScreenHeight() - 260) / ROW_HEIGHT);
+      const int rows = std::max(1, (renderer.getScreenHeight() - 260 - BUTTON_HEIGHT - 2 * GAP) / ROW_HEIGHT);
       booksFirst += action == Action::BooksPageDown ? rows : -rows;
       booksFirst = std::max(0, std::min(booksFirst, std::max(0, static_cast<int>(books.size()) - 1)));
       break;
@@ -381,12 +386,15 @@ void AudioPlayerActivity::renderBooks(int y) {
   const int font = systemFontId();
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
 
+  button(MARGIN, y, inner, BUTTON_HEIGHT, "Audiobookshelf", Action::ShowAudiobookshelf);
+  y += BUTTON_HEIGHT + 2 * GAP;
+
   if (books.empty()) {
-    renderer.text.render(font, MARGIN, y, "No audiobooks found.");
+    renderer.text.render(font, MARGIN, y, "No audiobooks on the device.");
     y += renderer.text.getLineHeight(font) + GAP;
-    renderer.text.render(smallFont, MARGIN, y, "Copy them to /Audiobooks on the SD card:");
+    renderer.text.render(smallFont, MARGIN, y, "Download them from Audiobookshelf, or copy them to");
     y += renderer.text.getLineHeight(smallFont) + 4;
-    renderer.text.render(smallFont, MARGIN, y, "one .m4b/.m4a/.mp3 file, or one folder per book.");
+    renderer.text.render(smallFont, MARGIN, y, "/Audiobooks: one .m4b/.m4a/.mp3 file or folder per book.");
     return;
   }
 

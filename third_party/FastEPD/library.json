@@ -1,0 +1,11 @@
+{
+  "name": "FastEPD",
+  "version": "1.0.0+60d4945",
+  "description": "BitBank FastEPD parallel e-paper driver (vendored, patched: see PATCHES.md)",
+  "license": "Apache-2.0",
+  "platforms": "espressif32",
+  "build": {
+    "srcDir": "src",
+    "includeDir": "src"
+  }
+}

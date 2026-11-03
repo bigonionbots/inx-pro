@@ -105,14 +105,17 @@ If you change a cached binary format, check the documented layouts and version n
 
 `-DINX_HAS_AUDIO_MODULE=1` compiles everything audio:
 - `src/system/{Bq25896,UsbSerialHost,AudioModule,AudioLink,AudioPlayer}`
-- `src/audio/` (MP3 and MP4/AAC readers)
-- `AudioModuleActivity` / `AudioPlayerActivity` (Device Management)
+- `src/audio/` (MP3 and MP4/AAC readers over `AudioFile`: SD or HTTP range requests)
+- `src/abs/` (Audiobookshelf client, on-demand Wi-Fi, downloads)
+- `AudioModuleActivity` (Device Management), `AudioPlayerActivity` (Home -> Shortcuts -> Audiobooks) and `AbsActivity`
 
 Everything is `#if`-guarded, so other envs and the simulator see empty files.
 
 The T5 powers an ATOM Lite through the BQ25896 OTG boost and runs the S3 as a USB host to its USB-UART bridge. The ESP-IDF class drivers for that are vendored unmodified in `third_party/usb_host/`. They are added as `symlink://` lib_deps only in this env, and `third_party/.clang-format` disables formatting there.
 
-The two firmwares speak `shared/audio_link/AudioLinkProtocol.h`, which both include verbatim, so change it in lockstep with `audio-module/` (a separate PlatformIO project). The player reads the SD card only on the main loop, into a PSRAM queue that a sender task drains, because SdFat is not thread-safe and most reader I/O does not lock `SdIoMutex`.
+The two firmwares speak `shared/audio_link/AudioLinkProtocol.h`, which both include verbatim, so change it in lockstep with `audio-module/` (a separate PlatformIO project). The player reads the SD card only on the main loop, into a PSRAM queue that a sender task drains, because SdFat is not thread-safe and most reader I/O does not lock `SdIoMutex`. Network work (streaming, sync, downloads) runs on tasks that never touch the SD card; anything that must reach the card (downloaded chunks, rotated tokens) is handed to a main-loop `service()`.
+
+Games (`-DINX_HAS_GAMES=1`, also only in `t5s3_audio`; `docs/games.md`) run in a separate boot: `GameMode` records the launch in RTC memory and restarts, and `setup()` hands the panel to FastEPD (`third_party/FastEPD`, vendored and patched) before the SDK display starts, because the SDK cannot share its panel. Keep the games stack MIT/Apache: InkDeck's integration is AGPL and Nofrendo ships under GPL-2.0, so neither may be copied in.
 
 Read `docs/audio-module.md` before touching the power or link code. It covers three traps: the charger's `OTG_CONFIG` resets to 1 and its I2C watchdog restores defaults; starting the USB host takes the USB-Serial-JTAG console away until reboot; and the ATOM Lite's emulated FTDI bridge only works at some baud rates.
 

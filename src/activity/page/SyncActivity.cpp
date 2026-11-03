@@ -12,7 +12,6 @@
 #include "activity/network/BackupRestoreActivity.h"
 #if INX_HAS_AUDIO_MODULE
 #include "activity/settings/AudioModuleActivity.h"
-#include "activity/settings/AudioPlayerActivity.h"
 #endif
 #include "activity/settings/DeviceInfoActivity.h"
 #include "activity/settings/DictionaryPickerActivity.h"
@@ -26,7 +25,7 @@ extern void onGoToHome();
 
 namespace {
 #if INX_HAS_AUDIO_MODULE
-constexpr int menuItemCount = 11;
+constexpr int menuItemCount = 10;
 #else
 constexpr int menuItemCount = 9;
 #endif
@@ -34,7 +33,7 @@ const char* menuItems[menuItemCount] = {"Manage via wifi",   "Calibre File Trans
                                         "OPDS Browser",      "Backup and restore", "KOReader Sync",
                                         "Check for updates", "Choose dictionary",  "Device Information",
 #if INX_HAS_AUDIO_MODULE
-                                        "Audio Module",      "Audiobooks",
+                                        "Audio Module",
 #endif
 };
 constexpr int listItemHeight = UiLayout::LIST_ITEM_HEIGHT;
@@ -140,13 +139,6 @@ void SyncActivity::loop() {
 #if INX_HAS_AUDIO_MODULE
     if (selectedIndex == 9) {
       enter(new AudioModuleActivity(renderer, mappedInput, [this] {
-        exit();
-        updateRequired = true;
-      }));
-      return;
-    }
-    if (selectedIndex == 10) {
-      enter(new AudioPlayerActivity(renderer, mappedInput, [this] {
         exit();
         updateRequired = true;
       }));

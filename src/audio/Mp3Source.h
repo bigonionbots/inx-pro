@@ -8,15 +8,11 @@
 
 #if INX_HAS_AUDIO_MODULE
 
-#include <SDCardManager.h>
-
 #include "AudioSource.h"
 
 class Mp3Source final : public AudioSource {
  public:
-  ~Mp3Source() override;
-
-  bool open(const std::string& path) override;
+  bool open(std::unique_ptr<AudioFile> file) override;
   audiolink::Codec codec() const override { return audiolink::Codec::Mp3; }
   uint32_t durationMs() const override { return durationMs_; }
   uint32_t seek(uint32_t ms) override;
@@ -39,7 +35,7 @@ class Mp3Source final : public AudioSource {
   uint32_t findFrame(uint32_t from, uint32_t limit);
   void readVbrHeader(const FrameHeader& first);
 
-  FsFile file_;
+  std::unique_ptr<AudioFile> file_;
   uint32_t dataStart_ = 0;  ///< first frame
   uint32_t dataEnd_ = 0;    ///< before an ID3v1 tag
   uint32_t position_ = 0;

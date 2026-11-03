@@ -35,6 +35,12 @@ extern void openHomeDescription(const std::string& bookPath, const std::string& 
 extern void onGoToStatistics();
 extern void onGoToHeatmapReport(HomeTheme::HeatmapView view);
 extern void onGoToStore();
+#if INX_HAS_AUDIO_MODULE
+extern void onGoToAudiobooks();
+#endif
+#if INX_HAS_GAMES
+extern void onGoToGames();
+#endif
 
 namespace {
 
@@ -392,6 +398,17 @@ bool Home::handleShortcut(const int item) {
     case 4:
       openHomeSubPage(HomeSubPage::Section::Dictionary);
       return true;
+#if INX_HAS_AUDIO_MODULE
+    case 5:
+      onGoToAudiobooks();
+      return true;
+#endif
+#if INX_HAS_GAMES
+    // After Audiobooks when that shortcut exists (ShortcutList order).
+    case 5 + (INX_HAS_AUDIO_MODULE ? 1 : 0):
+      onGoToGames();
+      return true;
+#endif
     default:
       return false;
   }

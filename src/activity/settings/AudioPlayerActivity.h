@@ -15,9 +15,9 @@
 #include "system/AudioPlayer.h"
 
 /**
- * Audiobook player screen (Device Management -> Audiobooks). Three views:
+ * Audiobook player screen (Home -> Shortcuts -> Audiobooks). Three views:
  * - Now playing: transport, volume and output; playback keeps going after the screen closes.
- * - Books: the books under /Audiobooks.
+ * - Books: the books under /Audiobooks, plus the way into Audiobookshelf (AbsActivity).
  * - Output: Bluetooth headphones (scan, connect, forget), the wired DAC, or the silent test sink.
  *
  * Confirm toggles play/pause and Up/Down change the volume; everything else is touch. While a
@@ -48,6 +48,7 @@ class AudioPlayerActivity final : public Activity {
     VolumeUp,
     ShowBooks,
     ShowOutput,
+    ShowAudiobookshelf,
     OpenBook,
     BooksPageUp,
     BooksPageDown,

@@ -60,6 +60,8 @@ class HalGPIO {
 
   bool hasTouch() const;
   bool isTouchPressed() const;
+  /** Every current contact (GT911 multi-touch), raw coordinates in the panel's native frame. */
+  InputManager::TouchSnapshot touchSnapshot() const { return inputMgr.getTouchSnapshot(); }
   bool wasTouchPressedAt(float& nx, float& ny) const;
   bool isTouchHeldAt(float& nx, float& ny) const;
   bool wasTouchActivity() const;

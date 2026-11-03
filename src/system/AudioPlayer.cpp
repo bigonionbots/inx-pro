@@ -18,11 +18,16 @@
 #include <atomic>
 #include <cctype>
 #include <cstring>
+#include <iterator>
 #include <memory>
 
 #include "AudioLink.h"
 #include "AudioModule.h"
+#include "abs/AbsClient.h"
+#include "abs/AbsLocal.h"
+#include "abs/AbsWifi.h"
 #include "audio/AudioSource.h"
+#include "audio/HttpAudioFile.h"
 #include "util/SdIoMutex.h"
 
 namespace AudioPlayer {
@@ -40,6 +45,10 @@ constexpr uint32_t SAVE_INTERVAL_MS = 30000;
 constexpr uint32_t MODULE_RETRY_MS = 5000;
 constexpr uint32_t CONTROL_TIMEOUT_MS = 300;
 constexpr uint32_t PREVIOUS_RESTARTS_TRACK_MS = 5000;
+constexpr uint32_t STREAM_RETRY_MS = 5000;
+constexpr uint32_t REMOTE_PUSH_INTERVAL_MS = 60000;
+constexpr uint32_t SYNC_TOLERANCE_MS = 2000;
+constexpr const char* ABS_KEY_PREFIX = "abs:";
 
 // ---------------------------------------------------------------------------------------------
 // Queue between service() (producer, main loop) and the sender task (consumer).
@@ -66,9 +75,18 @@ class FeedQueue {
     return buffer_ && lock_;
   }
 
-  bool push(const RecordKind kind, const uint8_t streamId, const uint8_t* data, const uint16_t length) {
+  /**
+   * Appends a record. With a generation, a queue cleared since then drops it silently: the
+   * network feeder checks for that only between reads, and clear() can land in between.
+   */
+  bool push(const RecordKind kind, const uint8_t streamId, const uint8_t* data, const uint16_t length,
+            const uint32_t generation = UINT32_MAX) {
     const RecordHeader header{kind, streamId, length};
     xSemaphoreTake(lock_, portMAX_DELAY);
+    if (generation != UINT32_MAX && generation != generation_) {
+      xSemaphoreGive(lock_);
+      return true;
+    }
     const bool fits = QUEUE_BYTES - used_ >= sizeof(header) + length;
     if (fits) {
       write(reinterpret_cast<const uint8_t*>(&header), sizeof(header));
@@ -167,21 +185,249 @@ void senderTask(void*) {
   }
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Network feeder: streams Audiobookshelf tracks over HTTP into the queue. It never touches the SD
+// card, so unlike the SD path it can run on its own task.
+
+struct FeedJob {
+  std::string url;
+  std::string name;
+  uint32_t startMs = 0;
+  uint8_t streamId = 0;
+  uint32_t generation = 0;
+};
+
+enum class FeedState : uint8_t { Idle, Running, Ended, Failed };
+
+SemaphoreHandle_t feedLock = nullptr;  // pendingJob, jobPending, activeFile, feedError
+TaskHandle_t feedTask = nullptr;
+FeedJob pendingJob;
+bool jobPending = false;
+HttpAudioFile* activeFile = nullptr;
+std::string feedError;
+std::atomic<uint8_t> feedStreamId{0};
+std::atomic<FeedState> feedState{FeedState::Idle};
+std::atomic<uint32_t> feedStartMs{0};
+std::atomic<bool> feedStartKnown{false};
+
+class FeedGuard {
+ public:
+  FeedGuard() { xSemaphoreTake(feedLock, portMAX_DELAY); }
+  ~FeedGuard() { xSemaphoreGive(feedLock); }
+  FeedGuard(const FeedGuard&) = delete;
+  FeedGuard& operator=(const FeedGuard&) = delete;
+};
+
+bool jobStale(const FeedJob& job) {
+  if (queue.generation() != job.generation) return true;
+  FeedGuard guard;
+  return jobPending;
+}
+
+void setActiveFile(HttpAudioFile* file) {
+  FeedGuard guard;
+  activeFile = file;
+}
+
+void runFeedJob(const FeedJob& job) {
+  feedStreamId = job.streamId;
+  feedStartKnown = false;
+  feedState = FeedState::Running;
+  auto fail = [](const std::string& why) {
+    {
+      FeedGuard guard;
+      feedError = why;
+    }
+    feedState = FeedState::Failed;
+  };
+
+  std::string error;
+  AbsWifi::Use wifi(error);
+  if (!wifi.ok()) return fail(error);
+  auto file = std::make_unique<HttpAudioFile>(Abs::url(job.url));
+  HttpAudioFile* raw = file.get();
+  setActiveFile(raw);
+  if (!raw->open(error)) {
+    setActiveFile(nullptr);
+    return fail(error);
+  }
+  auto trackSource = AudioSource::forName(job.name);
+  if (!trackSource || !trackSource->open(std::move(file))) {
+    setActiveFile(nullptr);
+    return fail(trackSource ? trackSource->error() : "unsupported file type");
+  }
+  const uint32_t actual = trackSource->seek(job.startMs);
+  if (jobStale(job)) {
+    setActiveFile(nullptr);
+    return;
+  }
+  feedStartMs = actual;
+  feedStartKnown = true;
+  uint8_t start[5];
+  start[0] = static_cast<uint8_t>(trackSource->codec());
+  std::memcpy(start + 1, &actual, sizeof(actual));
+  queue.push(RecordKind::Start, job.streamId, start, sizeof(start), job.generation);
+
+  static uint8_t chunk[DATA_CHUNK];  // this task only
+  for (;;) {
+    if (jobStale(job)) break;
+    if (queue.freeBytes() < sizeof(RecordHeader) + DATA_CHUNK + 16) {
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+    const size_t n = trackSource->read(chunk, sizeof(chunk));
+    if (n == 0) {
+      if (raw->failed()) {
+        fail(raw->lastError());
+      } else {
+        queue.push(RecordKind::End, job.streamId, nullptr, 0, job.generation);
+        feedState = FeedState::Ended;
+      }
+      break;
+    }
+    queue.push(RecordKind::Data, job.streamId, chunk, static_cast<uint16_t>(n), job.generation);
+  }
+  setActiveFile(nullptr);
+}
+
+void feedTaskMain(void*) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    for (;;) {
+      FeedJob job;
+      {
+        FeedGuard guard;
+        if (!jobPending) break;
+        job = pendingJob;
+        jobPending = false;
+      }
+      runFeedJob(job);
+    }
+  }
+}
+
+void postFeedJob(const FeedJob& job) {
+  {
+    FeedGuard guard;
+    pendingJob = job;
+    jobPending = true;
+    if (activeFile) activeFile->cancel();
+  }
+  xTaskNotifyGive(feedTask);
+}
+
+void cancelFeed() {
+  FeedGuard guard;
+  jobPending = false;
+  if (activeFile) activeFile->cancel();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Progress sync with Audiobookshelf, on its own task (network only); results go back to the
+// main loop through syncResult.
+
+struct SyncRequest {
+  bool push = false;
+  std::string itemId;
+  uint32_t bookMs = 0;
+  uint32_t durationMs = 0;
+  bool finished = false;
+};
+
+struct SyncResult {
+  bool valid = false;
+  bool push = false;
+  bool ok = false;
+  std::string itemId;
+  std::string error;
+  Abs::Progress progress;
+  uint32_t pushedBookMs = 0;
+};
+
+SemaphoreHandle_t syncLock = nullptr;
+TaskHandle_t syncTask = nullptr;
+SyncRequest syncRequest;  // one outstanding request; a newer one replaces it
+bool syncRequestPending = false;
+SyncResult syncResult;
+
+void syncTaskMain(void*) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    for (;;) {
+      SyncRequest request;
+      xSemaphoreTake(syncLock, portMAX_DELAY);
+      const bool any = syncRequestPending;
+      request = syncRequest;
+      syncRequestPending = false;
+      xSemaphoreGive(syncLock);
+      if (!any) break;
+
+      SyncResult result;
+      result.valid = true;
+      result.push = request.push;
+      result.itemId = request.itemId;
+      result.pushedBookMs = request.bookMs;
+      AbsWifi::Use wifi(result.error);
+      if (wifi.ok()) {
+        result.ok = !request.push || Abs::updateProgress(request.itemId, request.bookMs, request.durationMs,
+                                                         request.finished, result.error);
+        // After a push, read it back: its lastUpdate is what "in sync" means from now on.
+        if (result.ok) result.ok = Abs::progress(request.itemId, result.progress, result.error);
+      }
+      xSemaphoreTake(syncLock, portMAX_DELAY);
+      syncResult = result;
+      xSemaphoreGive(syncLock);
+    }
+  }
+}
+
+void postSync(const SyncRequest& request) {
+  if (!syncTask) return;
+  xSemaphoreTake(syncLock, portMAX_DELAY);
+  // A fetch must not replace a pending push.
+  if (!(syncRequestPending && syncRequest.push && !request.push)) syncRequest = request;
+  syncRequestPending = true;
+  xSemaphoreGive(syncLock);
+  xTaskNotifyGive(syncTask);
+}
+
+SyncResult takeSyncResult() {
+  SyncResult result;
+  xSemaphoreTake(syncLock, portMAX_DELAY);
+  result = syncResult;
+  syncResult.valid = false;
+  xSemaphoreGive(syncLock);
+  return result;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Player state (main loop only).
+
+struct TrackInfo {
+  std::string path;  ///< on the SD card, empty when streamed
+  std::string url;   ///< server-relative, streamed tracks only
+  std::string name;  ///< file name, picks the reader
+  uint32_t startOffsetMs = 0;
+  uint32_t durationMs = 0;
+};
 
 struct Progress {
   int track = 0;
   uint32_t ms = 0;
+  bool dirty = false;           ///< listened since the last successful sync
+  uint64_t syncedUpdateMs = 0;  ///< the server's lastUpdate at the last sync
 };
 
 bool isOpen = false;
 bool paused = false;
 bool finished = false;
+bool remote = false;
 Book book;
-std::vector<std::string> tracks;
+std::string progressKey;
+std::vector<TrackInfo> tracks;
 int track = 0;
-std::unique_ptr<AudioSource> source;
+std::unique_ptr<AudioSource> source;  // SD tracks only; streamed tracks live on the feeder task
 uint32_t trackDurationMs = 0;
 
 uint8_t streamId = 0;
@@ -192,7 +438,13 @@ uint32_t positionMs = 0;
 uint32_t session = 0;
 uint32_t lastSaveMs = 0;
 uint32_t lastModuleTryMs = 0;
+uint32_t retryStreamAtMs = 0;
 std::string message;
+
+bool syncDirty = false;
+uint64_t syncedUpdateMs = 0;
+uint32_t lastPushedBookMs = 0;
+uint32_t lastPushMs = 0;
 
 std::string baseName(const std::string& path) {
   const size_t slash = path.find_last_of('/');
@@ -248,20 +500,47 @@ std::vector<std::string> listAudioFiles(const std::string& folder) {
   return files;
 }
 
-// Progress file: one "<track>\t<ms>\t<book path>" line per book.
+bool isAbsBook() { return !book.absItemId.empty(); }
+
+uint32_t bookMs() {
+  return track < static_cast<int>(tracks.size()) ? tracks[track].startOffsetMs + positionMs : positionMs;
+}
+
+uint32_t bookDurationMs() {
+  if (tracks.empty()) return 0;
+  return tracks.back().startOffsetMs + tracks.back().durationMs;
+}
+
+// Progress file, one line per book: "<track>\t<ms>\t<dirty>\t<synced>\t<key>". Lines from the first
+// version have only "<track>\t<ms>\t<key>".
 std::vector<std::pair<std::string, Progress>> loadAllProgress() {
   std::vector<std::pair<std::string, Progress>> entries;
   FsFile file = SdMan.open(PROGRESS_FILE, O_RDONLY);
   if (!file) return entries;
   std::string line;
   auto flush = [&]() {
-    const size_t a = line.find('\t');
-    const size_t b = a == std::string::npos ? std::string::npos : line.find('\t', a + 1);
-    if (b != std::string::npos) {
+    std::vector<std::string> fields;
+    size_t at = 0;
+    for (int i = 0; i < 4; ++i) {
+      const size_t tab = line.find('\t', at);
+      if (tab == std::string::npos) break;
+      fields.push_back(line.substr(at, tab - at));
+      at = tab + 1;
+    }
+    if (fields.size() >= 2) {
       Progress p;
-      p.track = std::atoi(line.substr(0, a).c_str());
-      p.ms = static_cast<uint32_t>(std::strtoul(line.substr(a + 1, b - a - 1).c_str(), nullptr, 10));
-      entries.emplace_back(line.substr(b + 1), p);
+      p.track = std::atoi(fields[0].c_str());
+      p.ms = static_cast<uint32_t>(std::strtoul(fields[1].c_str(), nullptr, 10));
+      std::string key;
+      if (fields.size() == 4) {
+        p.dirty = fields[2] == "1";
+        p.syncedUpdateMs = std::strtoull(fields[3].c_str(), nullptr, 10);
+        key = line.substr(at);
+      } else {
+        // Old line: everything after the second tab is the path.
+        key = line.substr(fields[0].size() + fields[1].size() + 2);
+      }
+      entries.emplace_back(key, p);
     }
     line.clear();
   };
@@ -283,24 +562,30 @@ std::vector<std::pair<std::string, Progress>> loadAllProgress() {
 
 void saveProgress() {
   if (!isOpen) return;
+  if (isAbsBook()) {
+    const uint32_t now = bookMs();
+    const uint32_t moved = now > lastPushedBookMs ? now - lastPushedBookMs : lastPushedBookMs - now;
+    if (moved > SYNC_TOLERANCE_MS) syncDirty = true;
+  }
   SdIoMutex::Lock lock;
   auto entries = loadAllProgress();
-  const Progress now{track, positionMs};
+  const Progress now{track, positionMs, syncDirty, syncedUpdateMs};
   bool found = false;
   for (auto& entry : entries) {
-    if (entry.first == book.path) {
+    if (entry.first == progressKey) {
       entry.second = now;
       found = true;
     }
   }
-  if (!found) entries.emplace_back(book.path, now);
+  if (!found) entries.emplace_back(progressKey, now);
   SdMan.mkdir("/.system");
   FsFile file = SdMan.open(PROGRESS_FILE, O_WRONLY | O_CREAT | O_TRUNC);
   if (!file) return;
   for (const auto& entry : entries) {
-    char prefix[32];
-    const int n = snprintf(prefix, sizeof(prefix), "%d\t%lu\t", entry.second.track,
-                           static_cast<unsigned long>(entry.second.ms));
+    char prefix[64];
+    const int n = snprintf(prefix, sizeof(prefix), "%d\t%lu\t%d\t%llu\t", entry.second.track,
+                           static_cast<unsigned long>(entry.second.ms), entry.second.dirty ? 1 : 0,
+                           static_cast<unsigned long long>(entry.second.syncedUpdateMs));
     file.write(prefix, n);
     file.write(entry.first.data(), entry.first.size());
     file.write("\n", 1);
@@ -309,33 +594,53 @@ void saveProgress() {
   lastSaveMs = millis();
 }
 
+void requestPush() {
+  if (!isAbsBook() || !Abs::signedIn()) return;
+  SyncRequest request;
+  request.push = true;
+  request.itemId = book.absItemId;
+  request.bookMs = finished ? bookDurationMs() : bookMs();
+  request.durationMs = bookDurationMs();
+  request.finished = finished;
+  postSync(request);
+  lastPushMs = millis();
+}
+
 void sendControl(const Type type, const void* payload = nullptr, const size_t length = 0) {
   if (AudioLink::ready()) AudioLink::send(type, payload, length, CONTROL_TIMEOUT_MS);
 }
 
 void stopStream() {
   queue.clear();
+  if (remote) cancelFeed();
   if (streamActive) sendControl(Type::StreamStop, &streamId, 1);
   streamActive = false;
   endQueued = false;
+  retryStreamAtMs = 0;
 }
 
 bool openTrack(const int index) {
   source.reset();
   if (index < 0 || index >= static_cast<int>(tracks.size())) return false;
   track = index;
-  auto next = AudioSource::forPath(tracks[index]);
+  if (remote) {
+    // The feeder opens streamed tracks; the duration comes from the server.
+    trackDurationMs = tracks[index].durationMs;
+    return true;
+  }
+  const TrackInfo& info = tracks[index];
+  auto next = AudioSource::forName(info.name);
   if (!next) {
-    message = "Unsupported file: " + baseName(tracks[index]);
+    message = "Unsupported file: " + baseName(info.name);
     return false;
   }
   SdIoMutex::Lock lock;
-  if (!next->open(tracks[index])) {
-    message = baseName(tracks[index]) + ": " + next->error();
+  if (!next->open(AudioFile::openSd(info.path))) {
+    message = baseName(info.name) + ": " + next->error();
     AudioModule::logf("Player: %s", message.c_str());
     return false;
   }
-  trackDurationMs = next->durationMs();
+  trackDurationMs = next->durationMs() ? next->durationMs() : info.durationMs;
   source = std::move(next);
   return true;
 }
@@ -343,22 +648,42 @@ bool openTrack(const int index) {
 /** Starts a new stream at ms in the current track. The module drops anything of the old one. */
 void startStream(uint32_t ms) {
   stopStream();
-  if (!source) return;
+  if (!remote && !source) return;
   if (trackDurationMs && ms >= trackDurationMs) ms = trackDurationMs > 1000 ? trackDurationMs - 1000 : 0;
-  {
-    SdIoMutex::Lock lock;
-    ms = source->seek(ms);
-  }
   streamId = static_cast<uint8_t>(streamId + 1);
+  finished = false;
+  if (remote) {
+    FeedJob job;
+    job.url = tracks[track].url;
+    job.name = tracks[track].name;
+    job.startMs = ms;
+    job.streamId = streamId;
+    job.generation = queue.generation();
+    postFeedJob(job);
+  } else {
+    {
+      SdIoMutex::Lock lock;
+      ms = source->seek(ms);
+    }
+    uint8_t start[5];
+    start[0] = static_cast<uint8_t>(source->codec());
+    std::memcpy(start + 1, &ms, sizeof(ms));
+    queue.push(RecordKind::Start, streamId, start, sizeof(start));
+  }
   streamStartMs = ms;
   positionMs = ms;
-  finished = false;
-  uint8_t start[5];
-  start[0] = static_cast<uint8_t>(source->codec());
-  std::memcpy(start + 1, &ms, sizeof(ms));
-  queue.push(RecordKind::Start, streamId, start, sizeof(start));
   streamActive = true;
   sendControl(paused ? Type::Pause : Type::Resume);
+}
+
+/** Jumps to a position in the whole book (Audiobookshelf books, whose tracks carry offsets). */
+void seekBook(const uint32_t ms) {
+  int target = 0;
+  for (int i = 0; i < static_cast<int>(tracks.size()); ++i) {
+    if (tracks[i].startOffsetMs <= ms) target = i;
+  }
+  if (target != track && !openTrack(target)) return;
+  startStream(ms - tracks[target].startOffsetMs);
 }
 
 }  // namespace
@@ -377,7 +702,7 @@ void wakeModule() {
 namespace {
 
 void refill() {
-  if (!streamActive || endQueued || !source) return;
+  if (remote || !streamActive || endQueued || !source) return;
   static uint8_t chunk[DATA_CHUNK];
   SdIoMutex::Lock lock;
   for (int i = 0; i < REFILL_RECORDS_PER_SERVICE; ++i) {
@@ -392,6 +717,39 @@ void refill() {
   }
 }
 
+/** Picks up what the network feeder did for the current stream. */
+void updateFromFeeder() {
+  if (!remote || !streamActive || feedStreamId != streamId) return;
+  if (feedStartKnown) {
+    feedStartKnown = false;
+    streamStartMs = feedStartMs;
+  }
+  const FeedState state = feedState;
+  if (state == FeedState::Ended) endQueued = true;
+  if (state == FeedState::Failed && retryStreamAtMs == 0) {
+    {
+      FeedGuard guard;
+      message = "Network: " + feedError + ", retrying";
+    }
+    AudioModule::logf("Player: %s", message.c_str());
+    retryStreamAtMs = millis() + STREAM_RETRY_MS;
+  }
+}
+
+void finishTrack() {
+  if (track + 1 < static_cast<int>(tracks.size()) && openTrack(track + 1)) {
+    startStream(0);
+    saveProgress();
+    requestPush();
+    return;
+  }
+  streamActive = false;
+  finished = true;
+  positionMs = trackDurationMs;
+  saveProgress();
+  requestPush();
+}
+
 void updateFromModule() {
   const AudioLink::ModuleStatus module = AudioLink::status();
   if (!module.valid || !streamActive || module.status.streamId != streamId) return;
@@ -399,18 +757,88 @@ void updateFromModule() {
   if (state == PlayState::Idle) return;
   positionMs = streamStartMs + module.status.playedMs;
   if (trackDurationMs && positionMs > trackDurationMs) positionMs = trackDurationMs;
+  if (state == PlayState::Finished && endQueued) finishTrack();
+}
 
-  if (state == PlayState::Finished && endQueued) {
-    if (track + 1 < static_cast<int>(tracks.size()) && openTrack(track + 1)) {
-      startStream(0);
-      saveProgress();
-    } else {
-      streamActive = false;
-      finished = true;
-      positionMs = trackDurationMs;
-      saveProgress();
-    }
+/**
+ * Reconciles with the server, without trusting either clock: the server changed if its lastUpdate
+ * moved since our last sync, and we changed if we listened since then (syncDirty). Only the server
+ * changed: adopt it. Only we changed: push. Both: the further position wins.
+ */
+void applySyncResult() {
+  const SyncResult result = takeSyncResult();
+  if (!result.valid || !isOpen || result.itemId != book.absItemId) return;
+  if (!result.ok) {
+    AudioModule::logf("Sync: %s", result.error.c_str());
+    return;
   }
+  const Abs::Progress& server = result.progress;
+  if (result.push) {
+    syncedUpdateMs = server.lastUpdateMs;
+    lastPushedBookMs = result.pushedBookMs;
+    const uint32_t now = bookMs();
+    const uint32_t moved = now > lastPushedBookMs ? now - lastPushedBookMs : lastPushedBookMs - now;
+    syncDirty = moved > SYNC_TOLERANCE_MS;
+    saveProgress();
+    return;
+  }
+  if (!server.exists) {
+    if (bookMs() > 0) requestPush();
+    return;
+  }
+  const bool serverChanged = server.lastUpdateMs != syncedUpdateMs;
+  if (!serverChanged) {
+    if (syncDirty) requestPush();
+    return;
+  }
+  if (!syncDirty || server.currentMs > bookMs()) {
+    const uint32_t local = bookMs();
+    const uint32_t gap = server.currentMs > local ? server.currentMs - local : local - server.currentMs;
+    syncedUpdateMs = server.lastUpdateMs;
+    lastPushedBookMs = server.currentMs;
+    syncDirty = false;
+    if (gap > SYNC_TOLERANCE_MS) {
+      seekBook(server.currentMs);
+      message = "Position synced from Audiobookshelf";
+      AudioModule::logf("Sync: moved to %lu s from the server", static_cast<unsigned long>(server.currentMs / 1000));
+    }
+    saveProgress();
+  } else {
+    requestPush();
+  }
+}
+
+/** Common tail of open() and openRemote(): saved position, playback, first sync. */
+bool startBook() {
+  Progress saved;
+  {
+    SdIoMutex::Lock lock;
+    const auto entries = loadAllProgress();
+    const auto match = std::find_if(entries.begin(), entries.end(),
+                                    [](const auto& entry) { return entry.first == progressKey; });
+    if (match != entries.end()) saved = match->second;
+  }
+  if (saved.track < 0 || saved.track >= static_cast<int>(tracks.size())) saved = {};
+  if (!openTrack(saved.track)) return false;
+  isOpen = true;
+  paused = false;
+  finished = false;
+  positionMs = saved.ms;
+  syncDirty = saved.dirty;
+  syncedUpdateMs = saved.syncedUpdateMs;
+  lastPushedBookMs = syncDirty ? 0 : bookMs();
+  lastModuleTryMs = 0;
+  wakeModule();
+  session = AudioLink::sessionCounter();
+  if (AudioLink::ready()) startStream(saved.ms);
+  if (isAbsBook() && Abs::signedIn()) {
+    SyncRequest fetch;
+    fetch.itemId = book.absItemId;
+    postSync(fetch);
+  }
+  AudioModule::logf("Player: %s%s, track %d/%d at %lu s", book.title.c_str(), remote ? " (streaming)" : "",
+                    track + 1, static_cast<int>(tracks.size()), static_cast<unsigned long>(saved.ms / 1000));
+  return true;
 }
 
 }  // namespace
@@ -420,7 +848,12 @@ void begin() {
     AudioModule::logf("Player: out of memory");
     return;
   }
+  feedLock = xSemaphoreCreateMutex();
+  syncLock = xSemaphoreCreateMutex();
   xTaskCreate(senderTask, "audio_send", 6144, nullptr, 3, nullptr);
+  // TLS needs a deep stack.
+  xTaskCreate(feedTaskMain, "audio_feed", 12288, nullptr, 2, &feedTask);
+  xTaskCreate(syncTaskMain, "abs_sync", 10240, nullptr, 1, &syncTask);
 }
 
 std::vector<Book> listBooks() {
@@ -438,7 +871,14 @@ std::vector<Book> listBooks() {
     if (name[0] == '.') continue;
     const std::string path = std::string(BOOKS_DIRECTORY) + "/" + name;
     if (isDirectory) {
-      if (!listAudioFiles(path).empty()) books.push_back({path, name, true});
+      AbsLocal::BookMeta meta;
+      const bool fromAbs = AbsLocal::read(path, meta);
+      if (fromAbs && !meta.complete) continue;  // still downloading
+      if (!listAudioFiles(path).empty()) {
+        Book found{path, fromAbs && !meta.title.empty() ? meta.title : name, true};
+        if (fromAbs) found.absItemId = meta.itemId;
+        books.push_back(found);
+      }
     } else if (AudioSource::isAudioFile(name)) {
       books.push_back({path, baseName(name), false});
     }
@@ -452,43 +892,61 @@ bool open(const Book& next) {
   stop();
   message.clear();
   book = next;
-  {
-    SdIoMutex::Lock lock;
-    tracks = next.folder ? listAudioFiles(next.path) : std::vector<std::string>{next.path};
+  remote = false;
+  tracks.clear();
+  AbsLocal::BookMeta meta;
+  if (next.folder && AbsLocal::read(next.path, meta) && meta.complete) {
+    // Downloaded from Audiobookshelf: the server's track order and offsets, and progress sync.
+    book.absItemId = meta.itemId;
+    std::transform(meta.tracks.begin(), meta.tracks.end(), std::back_inserter(tracks), [&next](const Abs::Track& t) {
+      return TrackInfo{next.path + "/" + t.filename, "", t.filename, t.startOffsetMs, t.durationMs};
+    });
+  } else {
+    book.absItemId.clear();
+    std::vector<std::string> files;
+    {
+      SdIoMutex::Lock lock;
+      files = next.folder ? listAudioFiles(next.path) : std::vector<std::string>{next.path};
+    }
+    std::transform(files.begin(), files.end(), std::back_inserter(tracks),
+                   [](const std::string& file) { return TrackInfo{file, "", file, 0, 0}; });
   }
   if (tracks.empty()) {
     message = "No audio files";
     return false;
   }
-  Progress saved;
-  {
-    SdIoMutex::Lock lock;
-    const auto entries = loadAllProgress();
-    const auto match = std::find_if(entries.begin(), entries.end(),
-                                    [&next](const auto& entry) { return entry.first == next.path; });
-    if (match != entries.end()) saved = match->second;
+  // Downloaded and streamed copies of one Audiobookshelf book share their progress.
+  progressKey = isAbsBook() ? ABS_KEY_PREFIX + book.absItemId : book.path;
+  return startBook();
+}
+
+bool openRemote(const Abs::ItemDetail& item) {
+  stop();
+  message.clear();
+  book = Book{};
+  book.title = item.title;
+  book.absItemId = item.id;
+  remote = true;
+  tracks.clear();
+  std::transform(item.tracks.begin(), item.tracks.end(), std::back_inserter(tracks), [](const Abs::Track& t) {
+    return TrackInfo{"", t.contentUrl, t.filename, t.startOffsetMs, t.durationMs};
+  });
+  if (tracks.empty()) {
+    message = "No audio tracks";
+    return false;
   }
-  if (saved.track < 0 || saved.track >= static_cast<int>(tracks.size())) saved = {};
-  if (!openTrack(saved.track)) return false;
-  isOpen = true;
-  paused = false;
-  finished = false;
-  positionMs = saved.ms;
-  lastModuleTryMs = 0;
-  wakeModule();
-  session = AudioLink::sessionCounter();
-  if (AudioLink::ready()) startStream(saved.ms);
-  AudioModule::logf("Player: %s, track %d/%d at %lu s", book.title.c_str(), track + 1,
-                    static_cast<int>(tracks.size()), static_cast<unsigned long>(saved.ms / 1000));
-  return true;
+  progressKey = ABS_KEY_PREFIX + item.id;
+  return startBook();
 }
 
 void stop() {
   if (!isOpen) return;
   saveProgress();
+  requestPush();
   stopStream();
   source.reset();
   isOpen = false;
+  remote = false;
 }
 
 void togglePause() {
@@ -502,11 +960,14 @@ void togglePause() {
   }
   paused = !paused;
   sendControl(paused ? Type::Pause : Type::Resume);
-  if (paused) saveProgress();
+  if (paused) {
+    saveProgress();
+    requestPush();
+  }
 }
 
 void skip(const int32_t deltaMs) {
-  if (!isOpen || !source) return;
+  if (!isOpen || (!source && !remote)) return;
   const int64_t target = static_cast<int64_t>(positionMs) + deltaMs;
   if (target < 0 && deltaMs < 0 && track > 0 && positionMs < PREVIOUS_RESTARTS_TRACK_MS) {
     previousTrack();
@@ -523,6 +984,7 @@ void nextTrack() {
   if (!isOpen || track + 1 >= static_cast<int>(tracks.size())) return;
   if (openTrack(track + 1)) startStream(0);
   saveProgress();
+  requestPush();
 }
 
 void previousTrack() {
@@ -533,6 +995,7 @@ void previousTrack() {
   }
   if (openTrack(track - 1)) startStream(0);
   saveProgress();
+  requestPush();
 }
 
 void setVolume(const uint8_t percent) {
@@ -560,9 +1023,10 @@ View view() {
   v.open = isOpen;
   v.paused = paused;
   v.finished = finished;
+  v.remote = remote;
   v.waitingForModule = isOpen && !AudioLink::ready();
   v.title = book.title;
-  v.trackName = isOpen && track < static_cast<int>(tracks.size()) ? baseName(tracks[track]) : "";
+  v.trackName = isOpen && track < static_cast<int>(tracks.size()) ? baseName(tracks[track].name) : "";
   v.track = track;
   v.trackCount = static_cast<int>(tracks.size());
   v.positionMs = positionMs;
@@ -591,10 +1055,14 @@ void service() {
     session = now;
     if (!finished) startStream(positionMs);
   }
+  if (retryStreamAtMs != 0 && static_cast<int32_t>(millis() - retryStreamAtMs) >= 0) startStream(positionMs);
 
+  updateFromFeeder();
   updateFromModule();
   refill();
+  applySyncResult();
   if (!paused && streamActive && millis() - lastSaveMs >= SAVE_INTERVAL_MS) saveProgress();
+  if (remote && !paused && streamActive && millis() - lastPushMs >= REMOTE_PUSH_INTERVAL_MS) requestPush();
 }
 
 void shutdown() {

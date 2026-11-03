@@ -4,8 +4,9 @@
  * @file AudioSource.h
  * @brief One audio file turned into the codec byte stream the module decodes.
  *
- * Sources only touch the SD card from the main loop task (AudioPlayer::service()), and the caller
- * holds SdIoMutex around every call.
+ * Sources read through an AudioFile. For files on the SD card that happens only on the main loop
+ * task (AudioPlayer::service()) with SdIoMutex held; for remote files (HttpAudioFile) on the
+ * player's network feeder task.
  */
 
 #if INX_HAS_AUDIO_MODULE
@@ -17,11 +18,13 @@
 #include <memory>
 #include <string>
 
+#include "AudioFile.h"
+
 class AudioSource {
  public:
   virtual ~AudioSource() = default;
 
-  virtual bool open(const std::string& path) = 0;
+  virtual bool open(std::unique_ptr<AudioFile> file) = 0;
   virtual audiolink::Codec codec() const = 0;
   /** 0 when unknown. */
   virtual uint32_t durationMs() const = 0;
@@ -33,8 +36,8 @@ class AudioSource {
   /** Why open() failed, for the player's message line. */
   const std::string& error() const { return error_; }
 
-  /** Picks the reader from the file extension; nullptr for files it cannot play. */
-  static std::unique_ptr<AudioSource> forPath(const std::string& path);
+  /** Picks the reader from the file name's extension; nullptr for files it cannot play. */
+  static std::unique_ptr<AudioSource> forName(const std::string& name);
   static bool isAudioFile(const std::string& name);
 
  protected:

@@ -58,27 +58,23 @@ uint32_t readSampleRateIndex(BitReader& bits) {
 
 }  // namespace
 
-Mp4Source::~Mp4Source() {
-  if (file_) file_.close();
-}
-
 bool Mp4Source::readU32(const uint64_t at, uint32_t& value) {
   uint8_t bytes[4];
-  if (!file_.seekSet(at) || file_.read(bytes, 4) != 4) return false;
+  if (!file_->seekSet(at) || file_->read(bytes, 4) != 4) return false;
   value = be32(bytes);
   return true;
 }
 
 bool Mp4Source::readBox(const uint64_t at, const uint64_t limit, Box& box) {
   uint8_t header[16];
-  if (at + 8 > limit || !file_.seekSet(at) || file_.read(header, 8) != 8) return false;
+  if (at + 8 > limit || !file_->seekSet(at) || file_->read(header, 8) != 8) return false;
   uint64_t size = be32(header);
   std::memcpy(box.type, header + 4, 4);
   box.type[4] = '\0';
   box.start = at;
   box.payload = at + 8;
   if (size == 1) {
-    if (file_.read(header + 8, 8) != 8) return false;
+    if (file_->read(header + 8, 8) != 8) return false;
     size = be64(header + 8);
     box.payload = at + 16;
   } else if (size == 0) {
@@ -129,7 +125,7 @@ bool Mp4Source::parseAudioSpecificConfig(const uint8_t* data, const size_t lengt
 bool Mp4Source::parseEsds(const Box& esds) {
   const size_t length = static_cast<size_t>(std::min<uint64_t>(esds.end - esds.payload, 256));
   uint8_t data[256];
-  if (!file_.seekSet(esds.payload) || file_.read(data, length) != static_cast<int>(length)) return false;
+  if (!file_->seekSet(esds.payload) || file_->read(data, length) != static_cast<int>(length)) return false;
   size_t at = 4;  // FullBox version + flags
   auto descriptor = [&](uint8_t& tag, size_t& size) {
     if (at >= length) return false;
@@ -170,7 +166,7 @@ bool Mp4Source::parseSampleEntry(const Box& stsd) {
   }
   // AudioSampleEntry: 28 bytes of fields; QuickTime sound versions 1 and 2 add 16 or 36.
   uint8_t fields[28];
-  if (!file_.seekSet(entry.payload) || file_.read(fields, sizeof(fields)) != sizeof(fields)) return false;
+  if (!file_->seekSet(entry.payload) || file_->read(fields, sizeof(fields)) != sizeof(fields)) return false;
   const uint16_t version = static_cast<uint16_t>((fields[8] << 8) | fields[9]);
   const uint64_t children = entry.payload + 28 + (version == 1 ? 16 : (version == 2 ? 36 : 0));
   Box esds;
@@ -188,12 +184,12 @@ bool Mp4Source::parseTrack(const Box& trak) {
   if (!findChild(trak.payload, trak.end, "mdia", mdia)) return false;
   if (!findChild(mdia.payload, mdia.end, "hdlr", hdlr)) return false;
   uint8_t handler[12];
-  if (!file_.seekSet(hdlr.payload) || file_.read(handler, 12) != 12 || std::memcmp(handler + 8, "soun", 4) != 0) {
+  if (!file_->seekSet(hdlr.payload) || file_->read(handler, 12) != 12 || std::memcmp(handler + 8, "soun", 4) != 0) {
     return false;
   }
   if (!findChild(mdia.payload, mdia.end, "mdhd", mdhd)) return false;
   uint8_t header[32];
-  if (!file_.seekSet(mdhd.payload) || file_.read(header, 32) != 32) return false;
+  if (!file_->seekSet(mdhd.payload) || file_->read(header, 32) != 32) return false;
   uint64_t duration;
   if (header[0] == 1) {
     timescale_ = be32(header + 20);
@@ -214,19 +210,19 @@ bool Mp4Source::parseTrack(const Box& trak) {
   uint32_t count = 0;
   if (!findChild(stbl.payload, stbl.end, "stts", stts) || !readU32(stts.payload + 4, count)) return false;
   stts_.resize(std::min<size_t>(count, MAX_TABLE_ENTRIES));
-  file_.seekSet(stts.payload + 8);
+  file_->seekSet(stts.payload + 8);
   for (SttsEntry& e : stts_) {
     uint8_t b[8];
-    if (file_.read(b, 8) != 8) return false;
+    if (file_->read(b, 8) != 8) return false;
     e = {be32(b), be32(b + 4)};
   }
 
   if (!findChild(stbl.payload, stbl.end, "stsc", stsc) || !readU32(stsc.payload + 4, count)) return false;
   stsc_.resize(std::min<size_t>(count, MAX_TABLE_ENTRIES));
-  file_.seekSet(stsc.payload + 8);
+  file_->seekSet(stsc.payload + 8);
   for (StscEntry& e : stsc_) {
     uint8_t b[12];
-    if (file_.read(b, 12) != 12) return false;
+    if (file_->read(b, 12) != 12) return false;
     e = {be32(b), be32(b + 4)};
   }
 
@@ -261,20 +257,20 @@ void Mp4Source::parseTitle(const Box& moov) {
     if (std::memcmp(box.type, name, 4) == 0 && findChild(box.payload, box.end, "data", data)) {
       const size_t length = static_cast<size_t>(std::min<uint64_t>(data.end - data.payload - 8, 200));
       std::string text(length, '\0');
-      if (file_.seekSet(data.payload + 8) && file_.read(&text[0], length) == static_cast<int>(length)) title_ = text;
+      if (file_->seekSet(data.payload + 8) && file_->read(&text[0], length) == static_cast<int>(length)) title_ = text;
       return;
     }
     at = box.end;
   }
 }
 
-bool Mp4Source::open(const std::string& path) {
-  file_ = SdMan.open(path.c_str(), O_RDONLY);
+bool Mp4Source::open(std::unique_ptr<AudioFile> file) {
+  file_ = std::move(file);
   if (!file_) {
     error_ = "cannot open file";
     return false;
   }
-  fileSize_ = file_.fileSize();
+  fileSize_ = file_->fileSize();
   Box moov;
   if (!findChild(0, fileSize_, "moov", moov)) {
     error_ = "not an MP4 file (no moov)";
@@ -307,8 +303,8 @@ uint32_t Mp4Source::sampleSize(const uint32_t sample) {
     sizeCacheFirst_ = sample;
     const uint32_t entries = std::min(CACHE_ENTRIES, sampleCount_ - sample);
     uint8_t raw[CACHE_ENTRIES * 4];
-    file_.seekSet(stszTable_ + static_cast<uint64_t>(sample) * 4);
-    const int got = file_.read(raw, entries * 4);
+    file_->seekSet(stszTable_ + static_cast<uint64_t>(sample) * 4);
+    const int got = file_->read(raw, entries * 4);
     for (uint32_t i = 0; i < CACHE_ENTRIES; ++i) {
       sizeCache_[i] = static_cast<int>(i * 4 + 4) <= got ? be32(raw + i * 4) : 0;
     }
@@ -323,8 +319,8 @@ uint64_t Mp4Source::chunkOffset(const uint32_t chunk) {
     const uint32_t entries = std::min(CACHE_ENTRIES, chunkCount_ - chunk);
     const uint32_t width = chunkOffsets64_ ? 8 : 4;
     uint8_t raw[CACHE_ENTRIES * 8];
-    file_.seekSet(chunkTable_ + static_cast<uint64_t>(chunk) * width);
-    const int got = file_.read(raw, entries * width);
+    file_->seekSet(chunkTable_ + static_cast<uint64_t>(chunk) * width);
+    const int got = file_->read(raw, entries * width);
     for (uint32_t i = 0; i < CACHE_ENTRIES; ++i) {
       if (static_cast<int>((i + 1) * width) > got) {
         offsetCache_[i] = fileSize_;
@@ -393,8 +389,8 @@ size_t Mp4Source::read(uint8_t* out, const size_t max) {
       if (sample_ >= sampleCount_) break;
       const uint32_t size = sampleSize(sample_);
       const uint32_t perChunk = std::max<uint32_t>(1, stsc_[stscIndex_].samplesPerChunk);
-      if (size > 0 && size <= MAX_FRAME_BYTES && file_.seekSet(offset_) &&
-          file_.read(pending_.data() + ADTS_HEADER, size) == static_cast<int>(size)) {
+      if (size > 0 && size <= MAX_FRAME_BYTES && file_->seekSet(offset_) &&
+          file_->read(pending_.data() + ADTS_HEADER, size) == static_cast<int>(size)) {
         const uint32_t frameLength = size + ADTS_HEADER;
         uint8_t* h = pending_.data();
         h[0] = 0xFF;

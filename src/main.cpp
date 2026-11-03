@@ -46,7 +46,15 @@
 #include "activity/util/FullScreenMessageActivity.h"
 #include "state/ReaderSetting.h"
 #include "state/SystemSetting.h"
+#if INX_HAS_GAMES
+#include "activity/settings/GamesActivity.h"
+#include "games/GameMode.h"
+#endif
 #if INX_HAS_AUDIO_MODULE
+#include "abs/AbsClient.h"
+#include "abs/AbsWifi.h"
+#include "activity/settings/AbsActivity.h"
+#include "activity/settings/AudioPlayerActivity.h"
 #include "system/AudioLink.h"
 #include "system/AudioModule.h"
 #include "system/AudioPlayer.h"
@@ -227,6 +235,22 @@ void onGoToHeatmapReport(const HomeTheme::HeatmapView view) {
   switchTo<HeatmapReport>(render, input, view, [] { onGoToHome(); });
 }
 
+#if INX_HAS_AUDIO_MODULE
+void onGoToAudiobooks() {
+  switchTo<AudioPlayerActivity>(render, input, [] { onGoToHome(); });
+}
+
+#if INX_HAS_GAMES
+void onGoToGames() {
+  switchTo<GamesActivity>(render, input, [] { onGoToHome(); });
+}
+#endif
+
+void onGoToAudiobookshelf() {
+  switchTo<AbsActivity>(render, input, [] { onGoToAudiobooks(); }, [] { onGoToAudiobooks(); });
+}
+#endif
+
 void openHomeSubPage(const HomeSubPage::Section section) {
   switchTo<HomeSubPage>(render, input, section, [] { onGoToHome(); });
 }
@@ -383,10 +407,17 @@ void setup() {
 
   sdCardAvailable = SdMan.begin();
 
+#if INX_HAS_GAMES
+  // A game launch restarts into this boot path, which drives the panel itself (GameMode.h).
+  if (GameMode::pending()) GameMode::run();
+#endif
+
 #if INX_HAS_AUDIO_MODULE
   AudioModule::begin();
   AudioLink::begin();
   AudioPlayer::begin();
+  Abs::begin();
+  AbsWifi::prepare();
 #endif
 
   setupDisplayAndFonts();
@@ -449,6 +480,7 @@ void loop() {
 #if INX_HAS_AUDIO_MODULE
   AudioModule::service();
   AudioPlayer::service();
+  Abs::service();
 #endif
 
   LibraryIndexRefresh::render(renderer);

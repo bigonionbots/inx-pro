@@ -114,7 +114,7 @@ a PCM5102A, or a silent test sink.
 
 **Using it.** Copy books to `/Audiobooks` on the SD card. Each book is one `.m4b` / `.m4a` / `.mp4` /
 `.mp3` file, or a folder of them, played in natural name order ("Part 2" before "Part 10").
-**Device Management -> Audiobooks** lists them. Pick one and it resumes where you left off;
+**Home -> Shortcuts -> Audiobooks** lists them. Pick one and it resumes where you left off;
 progress is in `/.system/audio_progress.txt`.
 - The **Output** view picks Bluetooth headphones (Scan, tap the headset in pairing mode;
   it is remembered and reconnects), the wired DAC, or the silent test sink.
@@ -165,9 +165,59 @@ from a Linux PC, because the Linux FTDI path tops out around 10 KB/s. The T5's h
 decoders under the RealNetworks RPSL. The ATOM firmware binary is therefore GPL-3.0. The T5
 firmware does not link either library.
 
+## Audiobookshelf
+
+Books from an Audiobookshelf server can be streamed through the T5 or downloaded to the SD card.
+Either way they play through the module exactly like local books. Open it from
+**Audiobooks -> Books -> Audiobookshelf**.
+
+**Sign-in.** The server URL, username and password are entered once. The client uses the v2.26+
+JWT scheme, checked against the v2.37.1 server source:
+- `POST /login` with `x-return-tokens: true` returns `user.accessToken` and `user.refreshToken`.
+- On a 401, `POST /auth/refresh` with `x-refresh-token` returns a new access token and a rotated
+  refresh token, and the request is retried once.
+- Older servers fall back to the legacy `user.token`.
+
+The password is never stored. The tokens are saved in `/.system/audiobookshelf.json`. A refresh
+token unused for 30 days (the server default) means signing in again.
+
+**Streaming.** `HttpAudioFile` reads a track with HTTP Range requests (`GET
+/api/items/:id/file/:ino`, served by Express `sendFile`). It keeps three 128 KB blocks in PSRAM:
+the audio being played, plus the MP4 sample tables elsewhere in the file. Underneath, the same
+`Mp3Source`/`Mp4Source` readers run on a feeder task, so a streamed book needs no SD access.
+Network errors are retried. If retries fail, playback restarts from the current position after
+5 s. Wi-Fi stays on while streaming.
+
+**Downloads.** A book goes into `/Audiobooks/<title>/`, together with `.abs.json` (item id,
+server track order, per-track offsets, `complete`). An incomplete download is hidden from the
+local list. The download runs only while its screen is open:
+- the network task fills 64 KB PSRAM buffers;
+- the main loop writes them to the card, because SD access from other tasks races the reader;
+- leaving the screen pauses it, and Resume continues from the bytes already on the card.
+
+**Progress sync.** Downloaded and streamed copies of a book share one local progress entry
+(`abs:<itemId>` in `/.system/audio_progress.txt`). It is reconciled with `GET`/`PATCH
+/api/me/progress/:id` without trusting either clock:
+- if the server's `lastUpdate` changed since our last sync and we have not listened since, adopt
+  the server position;
+- if only we listened, push our position;
+- if both changed, the further position wins.
+
+Sync happens:
+- **fetch:** on opening a book;
+- **push:** on pause, track change, stop and finish, plus every 60 s while streaming.
+
+For a downloaded book with Wi-Fi off, a push turns Wi-Fi on briefly (`AbsWifi`) and off again.
+
+**Code:**
+- `src/abs/`: `AbsClient` (API and tokens), `AbsWifi` (on-demand Wi-Fi with a user count),
+  `AbsLocal` (downloaded-book metadata), `AbsDownloader`.
+- `src/audio/HttpAudioFile.*`.
+- `src/activity/settings/AbsActivity.*`.
+- The player's feeder and sync tasks, in `AudioPlayer.cpp`.
+
 ## Next stages
 
 - Chapters for M4B (Nero `chpl` or QuickTime chapter track), shown and skippable on the player.
 - A player entry outside Device Management: Home widget, or a library action on audio files.
-- AudioBookShelf: download books to `/Audiobooks` over Wi-Fi and sync progress (the playback path
-  stays local).
+- Audiobookshelf chapters: the API returns them (`media.chapters`), but the player does not show them yet.

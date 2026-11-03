@@ -12,17 +12,13 @@
 
 #if INX_HAS_AUDIO_MODULE
 
-#include <SDCardManager.h>
-
 #include <vector>
 
 #include "AudioSource.h"
 
 class Mp4Source final : public AudioSource {
  public:
-  ~Mp4Source() override;
-
-  bool open(const std::string& path) override;
+  bool open(std::unique_ptr<AudioFile> file) override;
   audiolink::Codec codec() const override { return audiolink::Codec::AacAdts; }
   uint32_t durationMs() const override { return durationMs_; }
   uint32_t seek(uint32_t ms) override;
@@ -63,7 +59,7 @@ class Mp4Source final : public AudioSource {
   uint64_t sampleTimeUnits(uint32_t sample) const;
   uint32_t sampleAtTime(uint64_t units) const;
 
-  FsFile file_;
+  std::unique_ptr<AudioFile> file_;
   uint64_t fileSize_ = 0;
   std::string title_;
 

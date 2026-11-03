@@ -8,6 +8,12 @@
 #include "images/BookmarkIcon.h"
 #include "images/BookAtlas.h"
 #include "images/FavoriteIcon.h"
+#if INX_HAS_AUDIO_MODULE
+#include "images/Headphones.h"
+#endif
+#if INX_HAS_GAMES
+#include "images/Gamepad.h"
+#endif
 #include "images/HighlightIcon.h"
 #include "images/StatisticsIcon.h"
 #include "system/Fonts.h"
@@ -21,7 +27,14 @@ struct ShortcutItem {
 
 constexpr ShortcutItem kItems[] = {{"Bookmarks", BookmarkIcon}, {"Highlights", HighlightIcon},
                                    {"Favorites", FavoriteIcon}, {"Statistics", StatisticsIcon},
-                                   {"Dictionary", BookAtlas}};
+                                   {"Dictionary", BookAtlas},
+#if INX_HAS_AUDIO_MODULE
+                                   {"Audiobooks", Headphones},
+#endif
+#if INX_HAS_GAMES
+                                   {"Games", Gamepad},
+#endif
+};
 constexpr int kItemCount = static_cast<int>(sizeof(kItems) / sizeof(kItems[0]));
 
 constexpr int kInnerPadding = 16;

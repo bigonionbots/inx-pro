@@ -26,10 +26,6 @@ uint32_t be32(const uint8_t* p) {
 
 }  // namespace
 
-Mp3Source::~Mp3Source() {
-  if (file_) file_.close();
-}
-
 Mp3Source::FrameHeader Mp3Source::parseHeader(const uint8_t* b) {
   FrameHeader h;
   if (b[0] != 0xFF || (b[1] & 0xE0) != 0xE0) return h;
@@ -53,8 +49,8 @@ uint32_t Mp3Source::findFrame(uint32_t from, const uint32_t limit) {
   uint8_t window[SCAN_WINDOW];
   const uint32_t stop = std::min(dataEnd_, from + limit);
   while (from + 4 < stop) {
-    file_.seekSet(from);
-    const int got = file_.read(window, sizeof(window));
+    file_->seekSet(from);
+    const int got = file_->read(window, sizeof(window));
     if (got < 8) return 0;
     for (int i = 0; i + 4 <= got; ++i) {
       const FrameHeader h = parseHeader(window + i);
@@ -63,8 +59,8 @@ uint32_t Mp3Source::findFrame(uint32_t from, const uint32_t limit) {
       uint8_t next[4];
       const uint32_t nextOffset = from + i + h.frameBytes;
       if (nextOffset + 4 > dataEnd_) return from + i;
-      file_.seekSet(nextOffset);
-      if (file_.read(next, 4) == 4) {
+      file_->seekSet(nextOffset);
+      if (file_->read(next, 4) == 4) {
         const FrameHeader n = parseHeader(next);
         if (n.valid && n.sampleRate == h.sampleRate) return from + i;
       }
@@ -76,8 +72,8 @@ uint32_t Mp3Source::findFrame(uint32_t from, const uint32_t limit) {
 
 void Mp3Source::readVbrHeader(const FrameHeader& first) {
   uint8_t frame[200];
-  file_.seekSet(dataStart_);
-  const int got = file_.read(frame, sizeof(frame));
+  file_->seekSet(dataStart_);
+  const int got = file_->read(frame, sizeof(frame));
   const uint32_t sideInfo = first.mpeg1 ? (first.mono ? 17 : 32) : (first.mono ? 9 : 17);
   const uint32_t xing = 4 + sideInfo;
   if (got >= static_cast<int>(xing + 8) &&
@@ -107,24 +103,24 @@ void Mp3Source::readVbrHeader(const FrameHeader& first) {
   }
 }
 
-bool Mp3Source::open(const std::string& path) {
-  file_ = SdMan.open(path.c_str(), O_RDONLY);
+bool Mp3Source::open(std::unique_ptr<AudioFile> file) {
+  file_ = std::move(file);
   if (!file_) {
     error_ = "cannot open file";
     return false;
   }
-  dataEnd_ = static_cast<uint32_t>(file_.fileSize());
+  dataEnd_ = static_cast<uint32_t>(file_->fileSize());
 
   uint8_t head[10];
-  if (file_.read(head, sizeof(head)) == sizeof(head) && std::memcmp(head, "ID3", 3) == 0) {
+  if (file_->read(head, sizeof(head)) == sizeof(head) && std::memcmp(head, "ID3", 3) == 0) {
     const uint32_t size = (static_cast<uint32_t>(head[6] & 0x7F) << 21) | ((head[7] & 0x7F) << 14) |
                           ((head[8] & 0x7F) << 7) | (head[9] & 0x7F);
     dataStart_ = 10 + size + ((head[5] & 0x10) ? 10 : 0);
   }
   if (dataEnd_ > 128) {
     uint8_t tag[3];
-    file_.seekSet(dataEnd_ - 128);
-    if (file_.read(tag, 3) == 3 && std::memcmp(tag, "TAG", 3) == 0) dataEnd_ -= 128;
+    file_->seekSet(dataEnd_ - 128);
+    if (file_->read(tag, 3) == 3 && std::memcmp(tag, "TAG", 3) == 0) dataEnd_ -= 128;
   }
 
   const uint32_t first = findFrame(dataStart_, SYNC_SEARCH_BYTES);
@@ -133,8 +129,8 @@ bool Mp3Source::open(const std::string& path) {
     return false;
   }
   uint8_t bytes[4] = {};
-  file_.seekSet(first);
-  file_.read(bytes, 4);
+  file_->seekSet(first);
+  file_->read(bytes, 4);
   const FrameHeader header = parseHeader(bytes);
   if (!header.valid) {
     error_ = "not an MP3 (layer III) file";
@@ -151,14 +147,14 @@ bool Mp3Source::open(const std::string& path) {
     durationMs_ = static_cast<uint32_t>(static_cast<uint64_t>(dataEnd_ - dataStart_) * 8 / header.bitrateKbps);
   }
   position_ = dataStart_;
-  file_.seekSet(position_);
+  file_->seekSet(position_);
   return true;
 }
 
 uint32_t Mp3Source::seek(const uint32_t ms) {
   if (ms == 0 || durationMs_ == 0) {
     position_ = dataStart_;
-    file_.seekSet(position_);
+    file_->seekSet(position_);
     return 0;
   }
   const uint32_t target = std::min(ms, durationMs_);
@@ -178,15 +174,15 @@ uint32_t Mp3Source::seek(const uint32_t ms) {
   }
   const uint32_t frame = findFrame(std::min(offset, dataEnd_), 64 * 1024);
   position_ = frame == NOT_FOUND ? dataEnd_ : frame;
-  file_.seekSet(position_);
+  file_->seekSet(position_);
   return target;
 }
 
 size_t Mp3Source::read(uint8_t* out, const size_t max) {
   if (position_ >= dataEnd_) return 0;
   const size_t want = std::min<size_t>(max, dataEnd_ - position_);
-  file_.seekSet(position_);
-  const int got = file_.read(out, want);
+  file_->seekSet(position_);
+  const int got = file_->read(out, want);
   if (got <= 0) {
     position_ = dataEnd_;
     return 0;
