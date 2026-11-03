@@ -52,7 +52,7 @@ constexpr int AB_R = 52;
 constexpr int AB_REACH = 115;  // touches this close to a button count as it
 constexpr int SELECT_X = 300;
 constexpr int START_X = 520;
-constexpr int SMALL_W = 140;   // SELECT / START, from BOTTOM_Y + 6 to the bottom edge - 4
+constexpr int SMALL_W = 140;  // SELECT / START, from BOTTOM_Y + 6 to the bottom edge - 4
 }  // namespace GameBoyControls
 
 struct Contact {

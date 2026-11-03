@@ -74,8 +74,8 @@ void begin();
 /** Persists rotated tokens. Main loop (SD). */
 void service();
 
-bool configured();     ///< a server URL and a user are set
-bool signedIn();       ///< a refresh or legacy token is held
+bool configured();  ///< a server URL and a user are set
+bool signedIn();    ///< a refresh or legacy token is held
 std::string serverUrl();
 std::string username();
 

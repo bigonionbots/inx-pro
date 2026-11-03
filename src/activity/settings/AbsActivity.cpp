@@ -127,8 +127,8 @@ void AbsActivity::startWork(const char* text, std::function<void(std::string& er
 }
 
 void AbsActivity::loadLibraries() {
-  startWork("Loading libraries...", [this](std::string& failure) { Abs::libraries(libraries, failure); },
-            View::Libraries);
+  startWork(
+      "Loading libraries...", [this](std::string& failure) { Abs::libraries(libraries, failure); }, View::Libraries);
 }
 
 void AbsActivity::loadBooks() {
@@ -167,9 +167,7 @@ void AbsActivity::editField(const char* title, std::string& field, const bool se
       }));
 }
 
-int AbsActivity::booksPerPage() const {
-  return std::max(1, (renderer.getScreenHeight() - 300) / BOOK_ROW_HEIGHT);
-}
+int AbsActivity::booksPerPage() const { return std::max(1, (renderer.getScreenHeight() - 300) / BOOK_ROW_HEIGHT); }
 
 void AbsActivity::loop() {
   if (subActivity) {
@@ -356,8 +354,8 @@ void AbsActivity::render() {
   targets.clear();
   renderer.clearScreen();
   const char* titles[] = {"Audiobookshelf", "Libraries", "Books", "Book", "Download"};
-  const char* title = view == View::Books && !library.name.empty() ? library.name.c_str()
-                                                                    : titles[static_cast<int>(view)];
+  const char* title =
+      view == View::Books && !library.name.empty() ? library.name.c_str() : titles[static_cast<int>(view)];
   const int top = SubPage::header(renderer, title) + 16;
   const int font = systemFontId();
   const int width = renderer.getScreenWidth();
@@ -460,8 +458,8 @@ void AbsActivity::renderBooks(int y) {
     } else if (b.progress > 0.0f) {
       info += "  -  " + std::to_string(static_cast<int>(b.progress * 100)) + "%";
     }
-    const auto local = std::find_if(downloaded.begin(), downloaded.end(),
-                                    [&b](const auto& entry) { return entry.first == b.id; });
+    const auto local =
+        std::find_if(downloaded.begin(), downloaded.end(), [&b](const auto& entry) { return entry.first == b.id; });
     if (local != downloaded.end()) info += local->second ? "  -  on device" : "  -  partly downloaded";
     renderer.text.render(smallFont, MARGIN, y + 16 + renderer.text.getLineHeight(font),
                          renderer.text.truncate(smallFont, info.c_str(), inner).c_str());
@@ -474,7 +472,8 @@ void AbsActivity::renderBooks(int y) {
   if ((page + 1) * booksPerPage() < total) {
     button(MARGIN + third + GAP, pagerY, third, BUTTON_HEIGHT, "Next", Action::PageDown);
   }
-  if (libraries.size() <= 1) button(MARGIN + 2 * (third + GAP), pagerY, third, BUTTON_HEIGHT, "Sign out", Action::SignOut);
+  if (libraries.size() <= 1)
+    button(MARGIN + 2 * (third + GAP), pagerY, third, BUTTON_HEIGHT, "Sign out", Action::SignOut);
 }
 
 void AbsActivity::renderDetail(int y) {
@@ -556,8 +555,8 @@ void AbsActivity::renderDownload(int y) {
     y += renderer.text.getLineHeight(font) + 2 * GAP;
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Play from device", Action::PlayLocal, 0, true);
   } else if (s.failed) {
-    renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, s.error.c_str(), inner).c_str(),
-                         true, EpdFontFamily::BOLD);
+    renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, s.error.c_str(), inner).c_str(), true,
+                         EpdFontFamily::BOLD);
     y += renderer.text.getLineHeight(smallFont) + 2 * GAP;
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Retry", Action::Download, 0, true);
   } else {

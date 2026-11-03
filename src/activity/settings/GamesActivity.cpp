@@ -82,9 +82,7 @@ void GamesActivity::onEnter() {
   closeMenu();
 }
 
-int GamesActivity::itemCount() const {
-  return static_cast<int>(pickingOverlay ? overlays.size() : roms.size());
-}
+int GamesActivity::itemCount() const { return static_cast<int>(pickingOverlay ? overlays.size() : roms.size()); }
 
 void GamesActivity::openOverlayPicker() {
   overlays = GameOverlay::list();
@@ -336,8 +334,8 @@ void GamesActivity::render() {
 
   topButtonY = y;
   renderer.rectangle.fill(MARGIN, y, inner, BUTTON_HEIGHT, true, true);
-  const std::string label = pickingOverlay ? std::string("Cancel")
-                                           : "Overlay: " + (overlay.empty() ? std::string("None") : overlay);
+  const std::string label =
+      pickingOverlay ? std::string("Cancel") : "Overlay: " + (overlay.empty() ? std::string("None") : overlay);
   const std::string shownLabel = renderer.text.truncate(font, label.c_str(), inner - 2 * GAP);
   renderer.text.render(font, MARGIN + (inner - renderer.text.getWidth(font, shownLabel.c_str())) / 2,
                        y + (BUTTON_HEIGHT - renderer.text.getLineHeight(font)) / 2, shownLabel.c_str(), false);
@@ -386,8 +384,9 @@ void GamesActivity::render() {
     }
     renderer.text.render(font, textX, y + (ROW_HEIGHT - renderer.text.getLineHeight(font)) / 2,
                          renderer.text.truncate(font, rowLabel.c_str(), width - MARGIN - textX).c_str());
-    if (i + 1 < last) renderer.line.render(MARGIN, y + ROW_HEIGHT - 1, width - MARGIN, y + ROW_HEIGHT - 1, true,
-                                           LineRender::Style::Dotted);
+    if (i + 1 < last)
+      renderer.line.render(MARGIN, y + ROW_HEIGHT - 1, width - MARGIN, y + ROW_HEIGHT - 1, true,
+                           LineRender::Style::Dotted);
     y += ROW_HEIGHT;
   }
 
@@ -419,8 +418,8 @@ void GamesActivity::renderMenu() {
     const int font = systemFontId();
     const int textY = actionY + (box.row - renderer.text.getLineHeight(font)) / 2;
     renderer.text.render(font, box.x + (half - renderer.text.getWidth(font, "Yes")) / 2, textY, "Yes", true);
-    renderer.text.render(font, box.x + half + (box.width - half - renderer.text.getWidth(font, "No")) / 2, textY,
-                         "No", true);
+    renderer.text.render(font, box.x + half + (box.width - half - renderer.text.getWidth(font, "No")) / 2, textY, "No",
+                         true);
     renderer.line.render(box.x + half, actionY, box.x + half, actionY + box.row, true, LineRender::Style::Dotted);
     PopUp::border(renderer, box);
     return;

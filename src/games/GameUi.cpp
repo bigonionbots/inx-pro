@@ -63,7 +63,8 @@ int contacts(Contact* out, const int max) {
   for (int i = 0; i < snapshot.count && n < max; ++i) {
     if (!snapshot.points[i].point.valid) continue;
     out[n].x = std::min(GameDisplay::WIDTH - 1, static_cast<int>(snapshot.points[i].point.x / w * GameDisplay::WIDTH));
-    out[n].y = std::min(GameDisplay::HEIGHT - 1, static_cast<int>(snapshot.points[i].point.y / h * GameDisplay::HEIGHT));
+    out[n].y =
+        std::min(GameDisplay::HEIGHT - 1, static_cast<int>(snapshot.points[i].point.y / h * GameDisplay::HEIGHT));
     ++n;
   }
   return n;

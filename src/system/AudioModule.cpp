@@ -7,8 +7,6 @@
 
 #if INX_HAS_AUDIO_MODULE
 
-#include "AudioLink.h"
-
 #include <Arduino.h>
 #include <BoardConfig.h>
 #include <Wire.h>
@@ -17,9 +15,11 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
-#include <deque>
 #include <cstring>
+#include <deque>
 #include <mutex>
+
+#include "AudioLink.h"
 
 namespace AudioModule {
 
@@ -218,8 +218,7 @@ void putLe32(uint8_t* out, const uint32_t value) {
 }
 
 // 'B' + u32 length + u16 burst + u16 gap_us: the module sends the pattern in bursts.
-void receiveFromModule(const uint32_t length, const uint16_t burst, const uint16_t gapUs, uint32_t& got,
-                       bool& exact) {
+void receiveFromModule(const uint32_t length, const uint16_t burst, const uint16_t gapUs, uint32_t& got, bool& exact) {
   UsbSerialHost::clearReceived();
   uint8_t command[9] = {'B'};
   putLe32(command + 1, length);

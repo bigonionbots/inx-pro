@@ -181,7 +181,8 @@ void configureLine(cdc_acm_dev_hdl_t hdl) {
   coding.bParityType = 0;
   coding.bDataBits = 8;
   err = cdc_acm_host_line_coding_set(hdl, &coding);
-  if (err != ESP_OK) AudioModule::logf("USB: set %lu baud failed: %s", static_cast<unsigned long>(lineBaud), esp_err_to_name(err));
+  if (err != ESP_OK)
+    AudioModule::logf("USB: set %lu baud failed: %s", static_cast<unsigned long>(lineBaud), esp_err_to_name(err));
 
   // Some bridges re-apply their power-on modem state with the line coding.
   cdc_acm_host_set_control_line_state(hdl, false, false);

@@ -48,10 +48,10 @@ std::atomic<bool> stopRequested{false};
 std::atomic<bool> taskRunning{false};
 std::atomic<bool> taskFinished{false};  // every track fully read
 
-AbsLocal::BookMeta meta;          // main loop
-std::vector<uint64_t> startAt;    // per track: bytes already on the card when the task started
-Status current;                   // guarded by lock
-FsFile file;                      // main loop: the track being written
+AbsLocal::BookMeta meta;        // main loop
+std::vector<uint64_t> startAt;  // per track: bytes already on the card when the task started
+Status current;                 // guarded by lock
+FsFile file;                    // main loop: the track being written
 int fileTrack = -1;
 uint32_t speedStartMs = 0;
 uint64_t speedStartBytes = 0;

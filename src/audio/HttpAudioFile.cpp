@@ -33,7 +33,8 @@ esp_err_t onHttpEvent(esp_http_client_event_t* event) {
   if (event->event_id != HTTP_EVENT_ON_HEADER || !event->user_data) return ESP_OK;
   if (strcasecmp(event->header_key, "Content-Range") != 0) return ESP_OK;
   const char* slash = strchr(event->header_value, '/');
-  if (slash && slash[1] != '*') static_cast<HeaderCapture*>(event->user_data)->totalSize = strtoull(slash + 1, nullptr, 10);
+  if (slash && slash[1] != '*')
+    static_cast<HeaderCapture*>(event->user_data)->totalSize = strtoull(slash + 1, nullptr, 10);
   return ESP_OK;
 }
 

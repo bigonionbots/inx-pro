@@ -162,7 +162,9 @@ def main():
         "do not edit.\n"
         " */\n\n"
         "#include <cstddef>\n#include <cstdint>\n\n"
+        "// clang-format off\n"
         + c_array("OVERLAY_TEMPLATE_PNG", guide) + "\n" + c_array("OVERLAY_EXAMPLE_PNG", sample)
+        + "// clang-format on\n"
     )
     print(f"template {len(guide)} bytes, example {len(sample)} bytes; {HEADER_OUT.relative_to(ROOT)} written")
 

@@ -23,11 +23,11 @@
 
 #include <AudioLinkProtocol.h>
 
-#include "abs/AbsClient.h"
-
 #include <cstdint>
 #include <string>
 #include <vector>
+
+#include "abs/AbsClient.h"
 
 namespace AudioPlayer {
 
@@ -58,7 +58,7 @@ struct View {
   audiolink::Output output = audiolink::Output::Bluetooth;
   uint8_t volume = 0;
   uint32_t queuedBytes = 0;  ///< audio read from the card, not yet sent to the module
-  std::string message;    ///< last error or notice
+  std::string message;       ///< last error or notice
 };
 
 /** Starts the sender task. Call once at boot. */

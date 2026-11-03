@@ -101,7 +101,7 @@ bool begin() {
   def.ioShiftSTR = BB_NOT_USED;
   def.ioShiftMask = 0;
   def.ioDCDummy = static_cast<uint8_t>(T5S3_LORA_CS);  // unpopulated on the Pro Lite, as in the SDK config
-  def.pGrayMatrix = nullptr;                          // FastEPD's ED047TC1-class default
+  def.pGrayMatrix = nullptr;                           // FastEPD's ED047TC1-class default
   def.iMatrixSize = 0;
   def.iLinePadding = 16;
   def.iVCOM = -1600;

@@ -116,8 +116,8 @@ void pixel(const Format& f, const uint8_t* row, const int x, uint8_t& lum, uint8
       const uint16_t g = sample(row, base + 1, f.depth, false);
       const uint16_t b = sample(row, base + 2, f.depth, false);
       lum = static_cast<uint8_t>((r * 77 + g * 150 + b * 29) >> 8);
-      if (f.hasKey && sample(row, base, f.depth, true) == f.key[0] && sample(row, base + 1, f.depth, true) == f.key[1] &&
-          sample(row, base + 2, f.depth, true) == f.key[2]) {
+      if (f.hasKey && sample(row, base, f.depth, true) == f.key[0] &&
+          sample(row, base + 1, f.depth, true) == f.key[1] && sample(row, base + 2, f.depth, true) == f.key[2]) {
         alpha = 0;
       }
       break;

@@ -7,10 +7,10 @@
 
 #if INX_HAS_AUDIO_MODULE
 
+#include <SDCardManager.h>
+
 #include <algorithm>
 #include <cctype>
-
-#include <SDCardManager.h>
 
 #include "Mp3Source.h"
 #include "Mp4Source.h"

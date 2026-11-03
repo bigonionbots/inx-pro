@@ -185,7 +185,6 @@ void senderTask(void*) {
   }
 }
 
-
 // ---------------------------------------------------------------------------------------------
 // Network feeder: streams Audiobookshelf tracks over HTTP into the queue. It never touches the SD
 // card, so unlike the SD path it can run on its own task.
@@ -814,8 +813,8 @@ bool startBook() {
   {
     SdIoMutex::Lock lock;
     const auto entries = loadAllProgress();
-    const auto match = std::find_if(entries.begin(), entries.end(),
-                                    [](const auto& entry) { return entry.first == progressKey; });
+    const auto match =
+        std::find_if(entries.begin(), entries.end(), [](const auto& entry) { return entry.first == progressKey; });
     if (match != entries.end()) saved = match->second;
   }
   if (saved.track < 0 || saved.track >= static_cast<int>(tracks.size())) saved = {};
@@ -836,8 +835,8 @@ bool startBook() {
     fetch.itemId = book.absItemId;
     postSync(fetch);
   }
-  AudioModule::logf("Player: %s%s, track %d/%d at %lu s", book.title.c_str(), remote ? " (streaming)" : "",
-                    track + 1, static_cast<int>(tracks.size()), static_cast<unsigned long>(saved.ms / 1000));
+  AudioModule::logf("Player: %s%s, track %d/%d at %lu s", book.title.c_str(), remote ? " (streaming)" : "", track + 1,
+                    static_cast<int>(tracks.size()), static_cast<unsigned long>(saved.ms / 1000));
   return true;
 }
 

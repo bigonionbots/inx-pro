@@ -68,19 +68,19 @@ enum class Type : uint8_t {
   StreamStop = 0x13,   ///< streamId u8: drop everything now
   Pause = 0x14,
   Resume = 0x15,
-  SetVolume = 0x16,    ///< u8 0..100
-  SetOutput = 0x17,    ///< u8 Output
-  BtScan = 0x20,       ///< u8 1 = start, 0 = stop
-  BtConnect = 0x21,    ///< 6-byte address
+  SetVolume = 0x16,  ///< u8 0..100
+  SetOutput = 0x17,  ///< u8 Output
+  BtScan = 0x20,     ///< u8 1 = start, 0 = stop
+  BtConnect = 0x21,  ///< 6-byte address
   BtDisconnect = 0x22,
-  BtForget = 0x23,     ///< forget the remembered device
+  BtForget = 0x23,  ///< forget the remembered device
 
   // Module -> host (unreliable, seq 0)
-  Hello = 0x80,        ///< HelloPayload, sent at boot and in answer to Ping
-  Ack = 0x81,          ///< AckPayload
-  Status = 0x82,       ///< StatusPayload
-  BtDevice = 0x83,     ///< BtDevicePayload, one per discovered device
-  Log = 0x84,          ///< UTF-8 text, for the T5's module log
+  Hello = 0x80,     ///< HelloPayload, sent at boot and in answer to Ping
+  Ack = 0x81,       ///< AckPayload
+  Status = 0x82,    ///< StatusPayload
+  BtDevice = 0x83,  ///< BtDevicePayload, one per discovered device
+  Log = 0x84,       ///< UTF-8 text, for the T5's module log
 };
 
 enum class Codec : uint8_t { Mp3 = 1, AacAdts = 2 };
@@ -96,13 +96,13 @@ enum class PlayState : uint8_t {
   Buffering = 1,  ///< Stream started, waiting for enough data or for the output
   Playing = 2,
   Paused = 3,
-  Draining = 4,   ///< StreamEnd received, playing out the buffer
-  Finished = 5,   ///< Stream played out completely
+  Draining = 4,  ///< StreamEnd received, playing out the buffer
+  Finished = 5,  ///< Stream played out completely
 };
 
 enum class BtState : uint8_t {
   Off = 0,
-  Idle = 1,        ///< Stack up, not connected, not scanning
+  Idle = 1,  ///< Stack up, not connected, not scanning
   Scanning = 2,
   Connecting = 3,
   Connected = 4,
@@ -143,10 +143,10 @@ struct StatusPayload {
   uint8_t output;     ///< Output
   uint8_t btState;    ///< BtState
   uint8_t volume;
-  uint8_t channels;      ///< Source channels, 0 until the first frame decodes
-  uint32_t sampleRate;   ///< Source sample rate, 0 until the first frame decodes
-  uint32_t playedMs;     ///< Source time sent to the output since StreamStart
-  uint32_t rxBuffered;   ///< Compressed bytes waiting
+  uint8_t channels;     ///< Source channels, 0 until the first frame decodes
+  uint32_t sampleRate;  ///< Source sample rate, 0 until the first frame decodes
+  uint32_t playedMs;    ///< Source time sent to the output since StreamStart
+  uint32_t rxBuffered;  ///< Compressed bytes waiting
   uint16_t pcmBufferedMs;
   uint16_t underruns;
   uint16_t decodeErrors;

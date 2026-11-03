@@ -141,8 +141,8 @@ bool Mp3Source::open(std::unique_ptr<AudioFile> file) {
   readVbrHeader(header);
 
   if (vbrFrames_ > 0) {
-    durationMs_ = static_cast<uint32_t>(static_cast<uint64_t>(vbrFrames_) * header.samplesPerFrame * 1000 /
-                                        header.sampleRate);
+    durationMs_ =
+        static_cast<uint32_t>(static_cast<uint64_t>(vbrFrames_) * header.samplesPerFrame * 1000 / header.sampleRate);
   } else {
     durationMs_ = static_cast<uint32_t>(static_cast<uint64_t>(dataEnd_ - dataStart_) * 8 / header.bitrateKbps);
   }

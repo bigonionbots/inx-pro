@@ -122,8 +122,7 @@ void handleAck(const uint8_t* payload, const uint16_t length) {
   }
   rxFree = ack.rxFree;
   if (advanced || windowCount == 0) lastProgressMs = millis();
-  const bool inWindow =
-      windowCount == 0 || static_cast<uint8_t>(ack.nextSeq - window[windowHead].seq) <= windowCount;
+  const bool inWindow = windowCount == 0 || static_cast<uint8_t>(ack.nextSeq - window[windowHead].seq) <= windowCount;
   if ((ack.flags & audiolink::ACK_OUT_OF_SEQUENCE) && !inWindow) {
     // The module expects a sequence number we never sent or already dropped: the two ends are out
     // of step. Resending cannot fix that; start a new session.
@@ -151,8 +150,8 @@ void handleHello(const uint8_t* payload, const uint16_t length) {
     clearWindowLocked();
     linkReady = true;
     ++session;
-    AudioModule::logf("Link: module %u.%u ready (protocol %u)", helloPayload.firmwareMajor,
-                      helloPayload.firmwareMinor, helloPayload.protocolVersion);
+    AudioModule::logf("Link: module %u.%u ready (protocol %u)", helloPayload.firmwareMajor, helloPayload.firmwareMinor,
+                      helloPayload.protocolVersion);
   } else {
     // Nobody asked: the module rebooted. Start a new session; the player restarts its stream.
     AudioModule::logf("Link: module restarted");

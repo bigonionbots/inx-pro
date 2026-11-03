@@ -99,9 +99,7 @@ std::string formatAddress(const uint8_t* a) {
 
 }  // namespace
 
-void AudioPlayerActivity::onEnter() {
-  showView(AudioPlayer::view().open ? View::NowPlaying : View::Books);
-}
+void AudioPlayerActivity::onEnter() { showView(AudioPlayer::view().open ? View::NowPlaying : View::Books); }
 
 void AudioPlayerActivity::onExit() {
   if (scanning) AudioPlayer::btScan(false);
@@ -164,8 +162,8 @@ void AudioPlayerActivity::loop() {
   const AudioPlayer::View v = AudioPlayer::view();
   const std::string key = stateKey();
   const bool stateChanged = key != renderedState && now - lastRenderMs >= MIN_REDRAW_MS;
-  const bool positionStale = view == View::NowPlaying && v.positionMs / 1000 != renderedSecond &&
-                             now - lastRenderMs >= POSITION_REDRAW_MS;
+  const bool positionStale =
+      view == View::NowPlaying && v.positionMs / 1000 != renderedSecond && now - lastRenderMs >= POSITION_REDRAW_MS;
   if (updateRequired || stateChanged || positionStale) {
     updateRequired = false;
     render();
@@ -334,8 +332,8 @@ void AudioPlayerActivity::renderNowPlaying(int y) {
   y += renderer.text.getLineHeight(font) + GAP;
   renderer.rectangle.render(MARGIN, y, inner, 14, true);
   if (v.durationMs) {
-    const int filled = static_cast<int>(static_cast<uint64_t>(inner - 4) * std::min(v.positionMs, v.durationMs) /
-                                        v.durationMs);
+    const int filled =
+        static_cast<int>(static_cast<uint64_t>(inner - 4) * std::min(v.positionMs, v.durationMs) / v.durationMs);
     if (filled > 0) renderer.rectangle.fill(MARGIN + 2, y + 2, filled, 10, true);
   }
   y += 14 + 2 * GAP;
@@ -407,8 +405,8 @@ void AudioPlayerActivity::renderBooks(int y) {
     const bool current = v.open && book.title == v.title;
     std::string label = (current ? "> " : "") + book.title;
     label = renderer.text.truncate(font, label.c_str(), inner);
-    renderer.text.render(font, MARGIN, rowY + (ROW_HEIGHT - renderer.text.getLineHeight(font)) / 2, label.c_str(),
-                         true, current ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    renderer.text.render(font, MARGIN, rowY + (ROW_HEIGHT - renderer.text.getLineHeight(font)) / 2, label.c_str(), true,
+                         current ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
     renderer.line.render(0, rowY + ROW_HEIGHT - 1, width, rowY + ROW_HEIGHT - 1, true, LineRender::Style::Dotted);
     targets.push_back({0, rowY, width, ROW_HEIGHT, Action::OpenBook, booksFirst + i});
   }
@@ -436,8 +434,7 @@ void AudioPlayerActivity::renderOutput(int y) {
   }
 
   const Action actions[3] = {Action::UseBluetooth, Action::UseWired, Action::UseTest};
-  const audiolink::Output outputs[3] = {audiolink::Output::Bluetooth, audiolink::Output::I2s,
-                                        audiolink::Output::Null};
+  const audiolink::Output outputs[3] = {audiolink::Output::Bluetooth, audiolink::Output::I2s, audiolink::Output::Null};
   const char* labels[3] = {"Bluetooth headphones", "Wired (DAC on the module)", "Test (no sound)"};
   for (int i = 0; i < 3; ++i) {
     button(MARGIN, y, inner, BUTTON_HEIGHT, labels[i], actions[i], 0, v.output == outputs[i]);

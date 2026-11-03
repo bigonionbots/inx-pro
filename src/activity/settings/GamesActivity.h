@@ -40,12 +40,12 @@ class GamesActivity final : public Activity {
   int listY = 0;        // top of the first ROM row
   int rowsPerPage = 1;  // ROM rows that fit on one page
   int page = 0;
-  int footerY = 0;      // Prev / page / Next row, shown when there is more than one page
+  int footerY = 0;  // Prev / page / Next row, shown when there is more than one page
 
   enum class Action : uint8_t { Open, Delete, Favorite };
   std::set<std::string> favorites;
-  int menuIndex = -1;            // ROM whose long-press menu (or confirmation) is showing
-  bool confirming = false;       // the Yes / No step for `pendingAction`
+  int menuIndex = -1;       // ROM whose long-press menu (or confirmation) is showing
+  bool confirming = false;  // the Yes / No step for `pendingAction`
   Action pendingAction = Action::Open;
 
   bool pickingOverlay = false;

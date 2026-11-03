@@ -29,11 +29,11 @@ constexpr int menuItemCount = 10;
 #else
 constexpr int menuItemCount = 9;
 #endif
-const char* menuItems[menuItemCount] = {"Manage via wifi",   "Calibre File Transfer", "Create hotspot",
-                                        "OPDS Browser",      "Backup and restore", "KOReader Sync",
-                                        "Check for updates", "Choose dictionary",  "Device Information",
+const char* menuItems[menuItemCount] = {
+    "Manage via wifi", "Calibre File Transfer", "Create hotspot",    "OPDS Browser",       "Backup and restore",
+    "KOReader Sync",   "Check for updates",     "Choose dictionary", "Device Information",
 #if INX_HAS_AUDIO_MODULE
-                                        "Audio Module",
+    "Audio Module",
 #endif
 };
 constexpr int listItemHeight = UiLayout::LIST_ITEM_HEIGHT;

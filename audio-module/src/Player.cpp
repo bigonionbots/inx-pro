@@ -91,8 +91,9 @@ void emit(const StereoFrame& frame) {
 void resetResampler() {
   resampleOutputRate = outputRate.load();
   const uint32_t rate = sourceRate.load();
-  resampleStep = rate && resampleOutputRate ? static_cast<uint32_t>((static_cast<uint64_t>(rate) << 16) / resampleOutputRate)
-                                            : (1u << 16);
+  resampleStep = rate && resampleOutputRate
+                     ? static_cast<uint32_t>((static_cast<uint64_t>(rate) << 16) / resampleOutputRate)
+                     : (1u << 16);
   resamplePhase = 0;
   resamplePrev = {0, 0};
 }
@@ -167,8 +168,8 @@ void handleCommand(const Command& command, bool& active, bool& flushed) {
       {
         const uint32_t heapBefore = ESP.getFreeHeap();
         if (!decoder->begin()) {
-          hostlink::log("decoder start failed, free heap %lu, largest block %lu", static_cast<unsigned long>(heapBefore),
-                        static_cast<unsigned long>(ESP.getMaxAllocHeap()));
+          hostlink::log("decoder start failed, free heap %lu, largest block %lu",
+                        static_cast<unsigned long>(heapBefore), static_cast<unsigned long>(ESP.getMaxAllocHeap()));
         } else {
           hostlink::log("%s decoder: %lu B, free heap %lu", command.codec == Codec::AacAdts ? "AAC" : "MP3",
                         static_cast<unsigned long>(heapBefore - ESP.getFreeHeap()),
@@ -234,8 +235,8 @@ bool begin() {
   if (!rx || !commands || !pcm.begin(config::PCM_RING_FRAMES)) return false;
   mp3.setDataCallback(onMp3);
   aac.setDataCallback(onAac);
-  return xTaskCreatePinnedToCore(decodeTask, "decode", config::DECODE_TASK_STACK, nullptr,
-                                 config::DECODE_TASK_PRIORITY, nullptr, config::APP_CORE) == pdPASS;
+  return xTaskCreatePinnedToCore(decodeTask, "decode", config::DECODE_TASK_STACK, nullptr, config::DECODE_TASK_PRIORITY,
+                                 nullptr, config::APP_CORE) == pdPASS;
 }
 
 void streamStart(const uint8_t streamId, const audiolink::Codec codec, const uint32_t) {

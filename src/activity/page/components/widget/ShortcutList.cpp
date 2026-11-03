@@ -25,14 +25,15 @@ struct ShortcutItem {
   const uint8_t* icon;
 };
 
-constexpr ShortcutItem kItems[] = {{"Bookmarks", BookmarkIcon}, {"Highlights", HighlightIcon},
-                                   {"Favorites", FavoriteIcon}, {"Statistics", StatisticsIcon},
-                                   {"Dictionary", BookAtlas},
+constexpr ShortcutItem kItems[] = {
+    {"Bookmarks", BookmarkIcon}, {"Highlights", HighlightIcon},
+    {"Favorites", FavoriteIcon}, {"Statistics", StatisticsIcon},
+    {"Dictionary", BookAtlas},
 #if INX_HAS_AUDIO_MODULE
-                                   {"Audiobooks", Headphones},
+    {"Audiobooks", Headphones},
 #endif
 #if INX_HAS_GAMES
-                                   {"Games", Gamepad},
+    {"Games", Gamepad},
 #endif
 };
 constexpr int kItemCount = static_cast<int>(sizeof(kItems) / sizeof(kItems[0]));

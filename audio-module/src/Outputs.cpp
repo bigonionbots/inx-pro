@@ -158,8 +158,8 @@ bool begin(const Output initial, const DeviceCallback onDevice) {
   deviceCallback = onDevice;
   player::setOutputRate(config::BT_SAMPLE_RATE);
   select(initial);
-  return xTaskCreatePinnedToCore(outputTask, "output", config::OUTPUT_TASK_STACK, nullptr,
-                                 config::OUTPUT_TASK_PRIORITY, nullptr, config::APP_CORE) == pdPASS;
+  return xTaskCreatePinnedToCore(outputTask, "output", config::OUTPUT_TASK_STACK, nullptr, config::OUTPUT_TASK_PRIORITY,
+                                 nullptr, config::APP_CORE) == pdPASS;
 }
 
 void select(const Output output) {

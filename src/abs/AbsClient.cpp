@@ -345,8 +345,8 @@ bool libraries(std::vector<Library>& out, std::string& error) {
   return true;
 }
 
-bool items(const std::string& libraryId, const int page, const int perPage, std::vector<ItemSummary>& out,
-           int& total, std::string& error) {
+bool items(const std::string& libraryId, const int page, const int perPage, std::vector<ItemSummary>& out, int& total,
+           std::string& error) {
   Response response;
   const std::string path = "/api/libraries/" + libraryId + "/items?limit=" + std::to_string(perPage) +
                            "&page=" + std::to_string(page) + "&sort=media.metadata.title&minified=1";
@@ -472,8 +472,8 @@ bool progress(const std::string& itemId, Progress& out, std::string& error) {
   return true;
 }
 
-bool updateProgress(const std::string& itemId, const uint32_t currentMs, const uint32_t durationMs,
-                    const bool finished, std::string& error) {
+bool updateProgress(const std::string& itemId, const uint32_t currentMs, const uint32_t durationMs, const bool finished,
+                    std::string& error) {
   JsonDocument request;
   request["currentTime"] = currentMs / 1000.0;
   request["duration"] = durationMs / 1000.0;

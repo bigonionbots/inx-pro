@@ -135,8 +135,7 @@ void AudioModuleActivity::render() {
     renderer.text.render(font, 20, textY, labels[i], !selected);
     const int valueWidth = renderer.text.getWidth(font, values[i]);
     renderer.text.render(font, screenWidth - valueWidth - 30, textY, values[i], !selected);
-    renderer.line.render(0, rowY + ROW_HEIGHT - 1, screenWidth, rowY + ROW_HEIGHT - 1, true,
-                         LineRender::Style::Dotted);
+    renderer.line.render(0, rowY + ROW_HEIGHT - 1, screenWidth, rowY + ROW_HEIGHT - 1, true, LineRender::Style::Dotted);
   }
 
   char charger[96];
@@ -190,9 +189,8 @@ void AudioModuleActivity::render() {
     const char* label;
     const char* value;
   };
-  const Row rows[] = {{"CHARGER / VBUS", charger}, {"BATTERY", battery},
-                      {"BRIDGE", device},           {"TRAFFIC", traffic},
-                      {"T5 -> MODULE", toModule},   {"MODULE -> T5", fromModule}};
+  const Row rows[] = {{"CHARGER / VBUS", charger}, {"BATTERY", battery},       {"BRIDGE", device},
+                      {"TRAFFIC", traffic},        {"T5 -> MODULE", toModule}, {"MODULE -> T5", fromModule}};
 
   const int valueMaxW = screenWidth - 40;
   int y = actionsTop + ACTION_COUNT * ROW_HEIGHT + 16;
