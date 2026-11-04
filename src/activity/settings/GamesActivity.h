@@ -17,8 +17,9 @@
 /**
  * Games screen (Home -> Shortcuts -> Games). Lists the ROMs under /Games and launches game mode
  * (games/GameMode.h), which restarts the device into a boot that drives the panel directly.
- * Game Boy / Color ROMs launch from the list; NES follows. The button at the top picks the
- * screen overlay (games/GameOverlay.h) from /Games/Overlays.
+ * Game Boy / Color ROMs launch from the list; NES follows. The buttons at the top pick the
+ * screen overlay (games/GameOverlay.h) from /Games/Overlays and switch game sound through the
+ * audio module on and off (games/GameSound.h).
  *
  * A tap opens a game. A long press opens a menu (Open, Delete, Add to / Remove from favorites),
  * and each choice asks for confirmation. Favorites (kept in /Games/.favorites, one file name per
@@ -51,6 +52,7 @@ class GamesActivity final : public Activity {
   bool pickingOverlay = false;
   std::vector<std::string> overlays;  // while picking: "" (none) then the PNGs
   std::string overlay;                // the chosen overlay, "" for none
+  bool sound = false;                 // GameSound::enabled()
   int gamesPage = 0;                  // the games list's page while picking
 
   int itemCount() const;

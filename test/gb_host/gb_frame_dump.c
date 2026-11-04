@@ -27,10 +27,17 @@ int main(int argc, char** argv) {
   if (!rom || fread(rom, 1, (size_t)rom_size, f) != (size_t)rom_size) return fprintf(stderr, "read failed\n"), 1;
   fclose(f);
 
-  if (!gbs_open(rom, (size_t)rom_size)) return 1;
+  if (!gbs_open(rom, (size_t)rom_size, true)) return 1;
   const int frames = atoi(argv[2]);
   const clock_t started = clock();
-  for (int i = 0; i < frames; ++i) gbs_run_frame();
+  // With the sound hardware on, as the device runs it: 738 samples is one frame at 44.1 kHz.
+  static int16_t audio[738];
+  int peak = 0;
+  for (int i = 0; i < frames; ++i) {
+    gbs_run_frame();
+    gbs_render_audio(audio, 738);
+    for (int s = 0; s < 738; ++s) peak = abs(audio[s]) > peak ? abs(audio[s]) : peak;
+  }
   const double seconds = (double)(clock() - started) / CLOCKS_PER_SEC;
 
   FILE* out = fopen(argv[3], "wb");
@@ -46,8 +53,8 @@ int main(int argc, char** argv) {
   fclose(out);
   size_t ram = 0;
   gbs_cart_ram(&ram);
-  printf("%s: %s mode, %d frames (%.0f fps on this host), cart RAM %zu\n", argv[1], gbs_is_color() ? "Color" : "DMG",
-         frames, seconds > 0 ? frames / seconds : 0.0, ram);
+  printf("%s: %s mode, %d frames (%.0f fps on this host), cart RAM %zu, audio peak %d\n", argv[1],
+         gbs_is_color() ? "Color" : "DMG", frames, seconds > 0 ? frames / seconds : 0.0, ram, peak);
   gbs_close();
   return 0;
 }

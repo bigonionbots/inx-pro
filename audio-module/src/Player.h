@@ -4,9 +4,12 @@
  * @file Player.h
  * @brief Compressed-audio buffer, decoder task and PCM hand-off to the active output.
  *
- * Data path: Link (AUDIO_DATA) -> rx stream buffer -> decoder task (MP3 / AAC-ADTS via libhelix)
- * -> resample to the output rate, mono to stereo, volume -> PCM ring -> output (Bluetooth A2DP,
- * I2S or the null sink) pulling with readPcm().
+ * Data path: Link (AUDIO_DATA) -> rx stream buffer -> decoder task (MP3 / AAC-ADTS via libhelix,
+ * or µ-law for live game sound) -> resample to the output rate, mono to stereo, volume
+ * -> PCM ring -> output (Bluetooth A2DP, I2S or the null sink) pulling with readPcm().
+ *
+ * Live (µ-law) streams are kept near real time: when more than LIVE_MAX_BUFFERED_MS of audio is
+ * waiting, the oldest is dropped instead of played late.
  *
  * Threads: the link task calls the stream/control functions, the decoder task owns the decoders,
  * outputs call readPcm() from their own context (the A2DP callback runs in the Bluetooth task).
@@ -24,7 +27,8 @@ namespace player {
 bool begin();
 
 // --- Link task ---
-void streamStart(uint8_t streamId, audiolink::Codec codec, uint32_t startMs);
+/** sampleRate and channels: for Codec::MuLaw (live) streams; 0 for compressed ones. */
+void streamStart(uint8_t streamId, audiolink::Codec codec, uint32_t startMs, uint32_t sampleRate, uint8_t channels);
 void streamEnd(uint8_t streamId);
 void streamStop(uint8_t streamId);
 void pause();

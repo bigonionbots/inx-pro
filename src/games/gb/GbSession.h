@@ -34,11 +34,16 @@ enum {
   GBS_DOWN = 1 << 7,
 };
 
+/** gbs_render_audio() output rate. */
+#define GBS_AUDIO_RATE 44100
+
 /**
  * Starts a game. `rom` must stay valid while the session runs. Runs in Color mode when the
- * cartridge supports it. Returns false (and logs why) if the core rejects the ROM.
+ * cartridge supports it. With `sound`, the sound hardware is emulated for gbs_render_audio();
+ * without it, sound register writes are only stored (cheaper). Returns false (and logs why) if
+ * the core rejects the ROM.
  */
-bool gbs_open(uint8_t* rom, size_t rom_size);
+bool gbs_open(uint8_t* rom, size_t rom_size, bool sound);
 void gbs_close(void);
 bool gbs_is_color(void);
 /** Cartridge RAM (battery saves). Size 0 when the cartridge has none. */
@@ -48,6 +53,11 @@ bool gbs_has_battery(void);
 bool gbs_take_cart_ram_written(void);
 void gbs_set_buttons(uint8_t pressed);
 void gbs_run_frame(void);
+/**
+ * The sound of the time since the last call: `samples` mono samples at GBS_AUDIO_RATE, from the
+ * sound registers as they are now (the core's fast, per-frame sound mode). Silence without sound.
+ */
+void gbs_render_audio(int16_t* out, int samples);
 const uint8_t* gbs_lcd(void);
 
 #ifdef __cplusplus

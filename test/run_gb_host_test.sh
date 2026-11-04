@@ -25,6 +25,23 @@ cc -std=gnu11 -O2 -w -Werror=implicit-function-declaration -DGB_HOST_TEST \
   "$ROOT_DIR/src/games/gb/GbSession.c" \
   -o "$BINARY"
 
+# Sound: uCity's music (GPL-3.0 game, downloaded for this test only, never shipped) must come out
+# as music; the core's half-rate mode turned it into noise. See test/gb_host/gb_audio_test.c.
+fetch https://github.com/AntonioND/ucity/releases/download/v1.3/ucity_compat.gbc ucity_compat.gbc
+cc -std=gnu11 -O2 -w -Werror=implicit-function-declaration -DGB_HOST_TEST \
+  "$ROOT_DIR/test/gb_host/gb_audio_test.c" \
+  "$ROOT_DIR/src/games/gb/GbApu.c" \
+  "$ROOT_DIR/src/games/gb/GbPort.c" \
+  "$ROOT_DIR/src/games/gb/GbSession.c" \
+  -lm -o "$BUILD_DIR/gb_audio_test"
+"$BUILD_DIR/gb_audio_test" "$BUILD_DIR/ucity_compat.gbc" 3600 "$BUILD_DIR/ucity.wav"
+# Held notes, low and high: each must come out at its pitch (no glitches at render chunk joins).
+for hz in 65 880; do
+  python3 "$ROOT_DIR/test/gb_host/make_tone_rom.py" "$BUILD_DIR/tone$hz.gb" "$hz" >/dev/null
+done
+"$BUILD_DIR/gb_audio_test" "$BUILD_DIR/tone65.gb" 300 - 65.0
+"$BUILD_DIR/gb_audio_test" "$BUILD_DIR/tone880.gb" 300 - 879.7
+
 "$BINARY" "$BUILD_DIR/dmg-acid2.gb" 120 "$BUILD_DIR/dmg-acid2.pgm"
 "$BINARY" "$BUILD_DIR/cgb-acid2.gbc" 120 "$BUILD_DIR/cgb-acid2.pgm"
 
@@ -51,3 +68,8 @@ c++ -std=c++20 -O2 -Wall -Wextra -DGB_HOST_TEST -I"$ROOT_DIR/lib/InflateReader" 
   "$ROOT_DIR/lib/InflateReader/InflateReader.cpp" "$BUILD_DIR/tinflate.o" -Wl,--gc-sections \
   -o "$BUILD_DIR/overlay_png_dump"
 python3 "$ROOT_DIR/test/gb_host/overlay_png_test.py" "$BUILD_DIR/overlay_png_dump" "$ROOT_DIR/docs/games/overlay-template.png" "$BUILD_DIR"
+
+# Game sound's link path (shared/audio_link/MuLaw.h, Resample2x.h), also on the uCity music above.
+c++ -std=c++20 -O2 -Wall -Wextra -I"$ROOT_DIR/shared/audio_link" "$ROOT_DIR/test/gb_host/live_audio_test.cpp" \
+  -o "$BUILD_DIR/live_audio_test"
+"$BUILD_DIR/live_audio_test" "$BUILD_DIR/ucity.wav"

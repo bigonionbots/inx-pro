@@ -8,6 +8,8 @@
 #include <AACDecoderHelix.h>
 #include <Arduino.h>
 #include <MP3DecoderHelix.h>
+#include <MuLaw.h>
+#include <Resample2x.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/stream_buffer.h>
@@ -28,6 +30,8 @@ struct Command {
   enum class Kind : uint8_t { Start, End, Stop } kind;
   uint8_t streamId;
   Codec codec;
+  uint32_t sampleRate;  // live streams
+  uint8_t channels;
 };
 
 constexpr size_t DECODE_CHUNK = 512;
@@ -40,6 +44,13 @@ PcmRing pcm;
 libhelix::MP3DecoderHelix mp3;
 libhelix::AACDecoderHelix aac;
 libhelix::CommonHelix* decoder = nullptr;
+
+// Decoder task only: the live (µ-law) stream, when one is playing instead of a compressed one.
+std::atomic<bool> live{false};
+std::atomic<uint32_t> liveRate{0};
+int16_t liveSamples[DECODE_CHUNK];
+resample2x::Interpolator liveInterpolator;  // when the output runs at exactly twice the stream
+std::atomic<uint16_t> liveDrops{0};         // chunks dropped
 
 // Written by the link task, read everywhere.
 std::atomic<int> currentStream{-1};
@@ -141,6 +152,41 @@ void onAac(_AACFrameInfo& info, short* samples, const size_t length, void*) {
 void endDecoder() {
   if (decoder) decoder->end();
   decoder = nullptr;
+  live = false;
+}
+
+/** Audio of the live stream not yet played: samples waiting in rx, plus the PCM ring. */
+uint32_t liveBufferedMs() {
+  const size_t rxSamples = config::RX_BUFFER_BYTES - xStreamBufferSpacesAvailable(rx);
+  const uint32_t rate = outputRate;
+  return (liveRate ? static_cast<uint32_t>(rxSamples * 1000 / liveRate) : 0) +
+         (rate ? static_cast<uint32_t>(pcm.available() * 1000 / rate) : 0);
+}
+
+/** Live stream: decodes what arrived, dropping it instead while too much is waiting. */
+void serviceLive(uint8_t* chunk) {
+  const size_t got = xStreamBufferReceive(rx, chunk, DECODE_CHUNK, pdMS_TO_TICKS(20));
+  if (got == 0) return;
+  // Only drop once playback has started: until then the buffer is filling to the prime level.
+  if (primed && liveBufferedMs() > audiolink::LIVE_MAX_BUFFERED_MS) {
+    liveDrops = static_cast<uint16_t>(liveDrops + 1);
+    return;
+  }
+  if (outputRate == 2 * liveRate) {
+    // The usual case (22050 Hz game sound, 44.1 kHz out): a real low-pass, not linear steps,
+    // which let the harmonics of square waves through as crackle (Resample2x.h).
+    for (size_t i = 0; i < got && !abortDecode; ++i) {
+      int16_t first = 0;
+      int16_t second = 0;
+      liveInterpolator.push(mulaw::decode(chunk[i]), first, second);
+      emit({first, first});
+      emit({second, second});
+    }
+    flushEmit();
+    return;
+  }
+  for (size_t i = 0; i < got; ++i) liveSamples[i] = mulaw::decode(chunk[i]);
+  handlePcm(liveSamples, got, liveRate, 1);
 }
 
 void resetPlayback() {
@@ -163,9 +209,25 @@ void handleCommand(const Command& command, bool& active, bool& flushed) {
     case Command::Kind::Start:
       endDecoder();
       resetPlayback();
-      decoder = command.codec == Codec::AacAdts ? static_cast<libhelix::CommonHelix*>(&aac)
-                                                : static_cast<libhelix::CommonHelix*>(&mp3);
-      {
+      if (command.codec == Codec::MuLaw) {
+        live = command.sampleRate > 0 && command.channels == 1;
+        liveRate = command.sampleRate;
+        liveInterpolator = resample2x::Interpolator();
+        sourceRate = command.sampleRate;  // STATUS shows it
+        sourceChannels = 1;
+        resetResampler();  // for handlePcm(), when the output is not exactly twice the rate
+        liveDrops = 0;
+        if (live) {
+          hostlink::log("live stream: mu-law %lu Hz mono", static_cast<unsigned long>(liveRate.load()));
+        } else {
+          hostlink::log("live stream rejected: %lu Hz, %u channels", static_cast<unsigned long>(command.sampleRate),
+                        command.channels);
+        }
+      } else {
+        decoder = command.codec == Codec::AacAdts ? static_cast<libhelix::CommonHelix*>(&aac)
+                                                  : static_cast<libhelix::CommonHelix*>(&mp3);
+      }
+      if (decoder) {
         const uint32_t heapBefore = ESP.getFreeHeap();
         if (!decoder->begin()) {
           hostlink::log("decoder start failed, free heap %lu, largest block %lu",
@@ -208,13 +270,20 @@ void decodeTask(void*) {
     }
     if (!active) continue;
 
-    const size_t got = xStreamBufferReceive(rx, chunk, sizeof(chunk), pdMS_TO_TICKS(20));
-    if (got > 0) {
-      if (decoder->write(chunk, got) < got) ++decodeErrors;
-      continue;
+    if (live) {
+      serviceLive(chunk);
+      if (!endReceived) continue;
+    } else if (decoder) {
+      const size_t got = xStreamBufferReceive(rx, chunk, sizeof(chunk), pdMS_TO_TICKS(20));
+      if (got > 0) {
+        if (decoder->write(chunk, got) < got) ++decodeErrors;
+        continue;
+      }
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(20));  // a stream that could not start: nothing to decode
     }
     if (endReceived && !flushed) {
-      decoder->flush();
+      if (decoder) decoder->flush();
       flushEmit();
       flushed = true;
       primed = true;  // play out whatever is left even if it never filled the prime level
@@ -239,17 +308,18 @@ bool begin() {
                                  nullptr, config::APP_CORE) == pdPASS;
 }
 
-void streamStart(const uint8_t streamId, const audiolink::Codec codec, const uint32_t) {
+void streamStart(const uint8_t streamId, const audiolink::Codec codec, const uint32_t, const uint32_t sampleRate,
+                 const uint8_t channels) {
   // Stop accepting first: the decoder task resets the buffer, and the link task is its only writer.
   accepting = false;
   abortDecode = true;
   currentStream = streamId;
-  const Command command{Command::Kind::Start, streamId, codec};
+  const Command command{Command::Kind::Start, streamId, codec, sampleRate, channels};
   xQueueSend(commands, &command, portMAX_DELAY);
 }
 
 void streamEnd(const uint8_t streamId) {
-  const Command command{Command::Kind::End, streamId, audiolink::Codec::Mp3};
+  const Command command{Command::Kind::End, streamId, audiolink::Codec::Mp3, 0, 0};
   xQueueSend(commands, &command, portMAX_DELAY);
 }
 
@@ -258,7 +328,7 @@ void streamStop(const uint8_t streamId) {
   accepting = false;
   abortDecode = true;
   currentStream = -1;
-  const Command command{Command::Kind::Stop, streamId, audiolink::Codec::Mp3};
+  const Command command{Command::Kind::Stop, streamId, audiolink::Codec::Mp3, 0, 0};
   xQueueSend(commands, &command, portMAX_DELAY);
 }
 
@@ -301,12 +371,18 @@ size_t readPcm(StereoFrame* out, const size_t frames) {
   if (paused || currentStream < 0) return 0;
   const PlayState now = playState;
   if (now == PlayState::Idle || now == PlayState::Finished) return 0;
+  const bool isLive = live;
   if (!primed) {
     if (pcm.available() < config::PCM_PRIME_FRAMES) return 0;
+    if (isLive && liveBufferedMs() < config::LIVE_PRIME_MS) return 0;
     primed = true;
   }
   const size_t got = pcm.read(out, frames);
-  if (got < frames && !endReceived) ++underruns;
+  if (got < frames && !endReceived) {
+    ++underruns;
+    // Live: go quiet and build the cushion up again, rather than stutter through many small gaps.
+    if (isLive) primed = false;
+  }
   playedFrames += static_cast<uint32_t>(got);
   if (got > 0 && now == PlayState::Buffering) playState = PlayState::Playing;
   return got;
@@ -330,7 +406,7 @@ void fillStatus(audiolink::StatusPayload& status) {
   status.rxBuffered = static_cast<uint32_t>(config::RX_BUFFER_BYTES - xStreamBufferSpacesAvailable(rx));
   status.pcmBufferedMs = static_cast<uint16_t>(rate ? pcm.available() * 1000 / rate : 0);
   status.underruns = underruns;
-  status.decodeErrors = decodeErrors;
+  status.decodeErrors = live ? liveDrops.load() : decodeErrors.load();
   status.freeHeap = ESP.getFreeHeap();
 }
 

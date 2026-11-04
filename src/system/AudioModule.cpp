@@ -116,7 +116,7 @@ uint8_t linkPatternByte(const uint32_t index) { return static_cast<uint8_t>((ind
 
 }  // namespace
 
-void begin() {
+void begin(const bool keepBoost) {
   if (!Bq25896::present()) {
     logf("Charger: BQ25896 not found");
     return;
@@ -125,6 +125,10 @@ void begin() {
   logf("Charger at boot: REG03=%02X REG07=%02X REG0B=%02X OTG_CONFIG=%d VBUS=%s", charger.reg03, charger.reg07,
        charger.reg0b, charger.otgConfig ? 1 : 0, Bq25896::vbusStatName(charger.vbusStat));
   // OTG_CONFIG resets to 1, so the boost may already be driving the port. Start from off.
+  if (keepBoost && charger.otgConfig && !Bq25896::externalVbusPresent(charger)) {
+    logf("Charger: keeping the boost on");
+    return;
+  }
   if (!Bq25896::setOtgConfig(false)) logf("Charger: could not clear OTG_CONFIG");
   pollCharger();
 }

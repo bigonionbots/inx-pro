@@ -133,6 +133,15 @@ progress is in `/.system/audio_progress.txt`.
 | `src/activity/settings/AudioPlayerActivity.*` | Now playing / Books / Output screens. |
 | `audio-module/src/` | `Link` (frames, ACKs, STATUS), `Player` (16 KB input buffer, libhelix MP3/AAC-LC, resampling to 44.1 kHz stereo, volume), `Outputs` (ESP32-A2DP source, I2S, null sink). The output and volume persist in NVS. |
 
+**Live streams (game sound, protocol 3).** Besides MP3 and AAC, a stream may be `Codec::MuLaw`:
+G.711 µ-law bytes (`shared/audio_link/MuLaw.h`), with the sample rate and channel count in
+STREAM_START (fields added in protocol 3; a protocol 2 host's shorter STREAM_START still works).
+The module plays a live stream near real time: it starts once `LIVE_PRIME_MS` (60 ms) is waiting,
+drops what arrives while more than `LIVE_MAX_BUFFERED_MS` (150 ms) is, and after running dry
+waits for 60 ms again. STATUS `decodeErrors` counts those drops for a live stream. Games send 22050 Hz mono (see
+`docs/games.md`); when the output runs at exactly twice the stream rate, as Bluetooth and I2S do
+at 44.1 kHz, the module upsamples with `Resample2x.h`'s low-pass instead of its linear resampler. Both firmwares must be updated together for it.
+
 **Module firmware envs** (`audio-module/platformio.ini`):
 - `atom_lite`, the default, is the player.
 - `atom_linkdiag` is the raw stage-2 link test used by the T5's Audio Module -> Link test.

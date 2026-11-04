@@ -33,7 +33,12 @@ static void on_error(gb_s* g, const enum gb_error_e err, const uint16_t addr) {
   playdate->system->logToConsole("core error %d at %04x", (int)err, addr);
 }
 
-bool gbs_open(uint8_t* rom, const size_t rom_size) {
+static bool sound_on;
+static CB_GameContext sound_context;
+static CB_GameScene sound_scene;
+static CB_GameScene* sound_scene_ref;  // audio_callback() takes the scene through a pointer
+
+bool gbs_open(uint8_t* rom, const size_t rom_size, const bool sound) {
   gbs_close();
   gb = GBS_FAST_ALLOC(sizeof(gb_s));
   wram = GBS_FAST_ALLOC(WRAM_SIZE_CGB);
@@ -61,12 +66,28 @@ bool gbs_open(uint8_t* rom, const size_t rom_size) {
   if (gb->gb_cart_ram) memset(gb->gb_cart_ram, 0xFF, ram_size);
   gb->gb_cart_ram_size = (uint32_t)ram_size;
   gb_init_lcd(gb);
-  gb->direct.sound = 0;
+  // gb_init() turned sound on, so gb_reset() has already initialised the sound hardware.
+  gb->direct.sound = sound ? 1 : 0;
+  sound_on = sound;
+  if (sound) {
+    audio_enabled = 1;
+    audio_muted = 0;
+    // Full rate. The half-rate setting (1) renders every other sample and interpolates, but on
+    // this (non-Playdate) build path it comes out as noise: 4-5x the zero crossings of full rate.
+    preferences_sample_rate = 0;
+    sound_context.gb = gb;
+    sound_scene.context = &sound_context;
+    sound_scene.audioLocked = false;
+    sound_scene.is_stereo = false;  // both channels mixed into one
+    sound_scene_ref = &sound_scene;
+  }
   gb->direct.joypad = 0xFF;
   return true;
 }
 
 void gbs_close(void) {
+  sound_on = false;
+  sound_scene_ref = NULL;
   if (gb && gb->gb_cart_ram) cb_free(gb->gb_cart_ram);
   free(gb);
   free(wram);
@@ -105,5 +126,22 @@ void gbs_run_frame(void) {
 }
 
 const uint8_t* gbs_lcd(void) { return lcd; }
+
+/* audio_callback() renders in chunks of up to 256 samples, and in mono (left == right) it
+ * advances only the left pointer between them: from the second chunk on it takes its stereo
+ * path and adds the right channel's share back into the first chunk, which doubled some samples
+ * and left gaps, heard as crackle on low notes. The Playdate asks for at most 256 samples at a
+ * time, so it never sees this; asking for no more here keeps the mono path within one chunk. */
+#define GBS_AUDIO_CALL_MAX 256
+
+void gbs_render_audio(int16_t* out, const int samples) {
+  for (int done = 0; done < samples;) {
+    const int n = samples - done < GBS_AUDIO_CALL_MAX ? samples - done : GBS_AUDIO_CALL_MAX;
+    if (!gb || !sound_on || !audio_callback(&sound_scene_ref, out + done, out + done, n)) {
+      memset(out + done, 0, (size_t)n * sizeof(int16_t));
+    }
+    done += n;
+  }
+}
 
 #endif

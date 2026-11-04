@@ -32,6 +32,12 @@ constexpr size_t RX_BUFFER_BYTES = 16 * 1024;
 constexpr size_t PCM_RING_FRAMES = 2048;
 /** Playback starts once the PCM ring is this full, so the first frames do not underrun. */
 constexpr size_t PCM_PRIME_FRAMES = PCM_RING_FRAMES / 2;
+/**
+ * A live stream (game sound) starts, and restarts after running dry, once this much is waiting
+ * (PCM ring plus undecoded bytes). Its data comes in bursts, a frame of the game at a time over
+ * a USB link, and Bluetooth takes it in bursts too; less than this underran constantly.
+ */
+constexpr uint32_t LIVE_PRIME_MS = 60;
 
 constexpr size_t UART_RX_BUFFER = 4096;
 constexpr size_t UART_TX_BUFFER = 2048;

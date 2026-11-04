@@ -22,6 +22,7 @@
 #include "GameDisplay.h"
 #include "GameMode.h"
 #include "GameOverlay.h"
+#include "GameSound.h"
 #include "GameUi.h"
 #include "GameVideo.h"
 #include "gb/GbSession.h"
@@ -46,6 +47,10 @@ constexpr int64_t FRAME_US = 16743;  // 59.73 Hz
 constexpr int64_t MAX_LAG_US = 4 * FRAME_US;
 constexpr uint32_t SAVE_IDLE_MS = 3000;  // write the .sav this long after the game stops writing
 constexpr uint32_t STATS_MS = 2000;
+/** Sound samples per frame at GBS_AUDIO_RATE, Q16: 44100 * 70224 / 4194304 = 738.35. */
+constexpr uint32_t AUDIO_PER_FRAME_Q16 =
+    static_cast<uint32_t>(static_cast<uint64_t>(GBS_AUDIO_RATE) * 70224 * 65536 / 4194304);
+constexpr int AUDIO_MAX_PER_FRAME = 740;
 
 using namespace GameUi::GameBoyControls;
 
@@ -257,7 +262,8 @@ void run(const char* romPath) {
     INX_SERIAL.printf("[GAME] could not read %s\n", romPath);
     return;
   }
-  if (!gbs_open(rom, romSize)) {
+  const bool sound = GameSound::begin();
+  if (!gbs_open(rom, romSize, sound)) {
     free(rom);
     return;
   }
@@ -293,6 +299,8 @@ void run(const char* romPath) {
   uint32_t lastScans = GameVideo::scans();
   uint32_t emuUs = 0;
   int64_t nextFrame = esp_timer_get_time();
+  uint32_t audioDue = 0;  // Q16 samples owed
+  static int16_t audio[AUDIO_MAX_PER_FRAME];
 
   for (;;) {
     gpio.update();
@@ -309,7 +317,15 @@ void run(const char* romPath) {
     gbs_set_buttons(buttonsFor(touches, count));
     const int64_t started = esp_timer_get_time();
     gbs_run_frame();
+    if (sound) {
+      audioDue += AUDIO_PER_FRAME_Q16;
+      const int samples = static_cast<int>(audioDue >> 16);
+      audioDue &= 0xFFFF;
+      gbs_render_audio(audio, samples);
+      GameSound::push(audio, static_cast<size_t>(samples));
+    }
     emuUs += static_cast<uint32_t>(esp_timer_get_time() - started);
+    GameSound::service();
     renderFrame(epd, gbs_lcd());
     ++statsFrames;
 
@@ -325,11 +341,14 @@ void run(const char* romPath) {
     if (millis() - statsStart >= STATS_MS) {
       const uint32_t elapsed = millis() - statsStart;
       const uint32_t scans = GameVideo::scans();
-      char line[40];
-      std::snprintf(line, sizeof(line), "%s %lu fps, emu %lu ms, scan %lu/s", gbs_is_color() ? "GBC" : "GB",
+      char line[48];
+      const char* soundText = GameSound::statusText();
+      // With sound, its state replaces the "/s" so the line still fits (38 characters).
+      std::snprintf(line, sizeof(line), "%s %lu fps, emu %lu ms, scan %lu%s%s", gbs_is_color() ? "GBC" : "GB",
                     static_cast<unsigned long>(statsFrames * 1000 / elapsed),
                     static_cast<unsigned long>(statsFrames ? emuUs / statsFrames / 1000 : 0),
-                    static_cast<unsigned long>((scans - lastScans) * 1000 / elapsed));
+                    static_cast<unsigned long>((scans - lastScans) * 1000 / elapsed), soundText[0] ? " " : "/s",
+                    soundText);
       INX_SERIAL.printf("[GAME] %s\n", line);
       if (static_cast<int32_t>(millis() - statusAfter) >= 0) drawStatus(epd, line);
       lastScans = scans;
@@ -354,6 +373,7 @@ void run(const char* romPath) {
   }
 
   if (cartWritten) writeSave(save);
+  GameSound::end();
   GameVideo::stop();
   gbs_close();
   free(rom);

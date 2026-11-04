@@ -18,6 +18,7 @@
 #include "activity/page/components/global/PopUp.h"
 #include "games/GameMode.h"
 #include "games/GameOverlay.h"
+#include "games/GameSound.h"
 #include "images/Star.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
@@ -77,6 +78,7 @@ void GamesActivity::onEnter() {
   sortRoms();
   GameOverlay::ensureTemplate();
   overlay = GameOverlay::selected();
+  sound = GameSound::enabled();
   pickingOverlay = false;
   page = 0;
   closeMenu();
@@ -291,6 +293,10 @@ void GamesActivity::loop() {
       if (y >= topButtonY && y < topButtonY + BUTTON_HEIGHT) {
         if (pickingOverlay) {
           closeOverlayPicker();
+        } else if (nx >= 0.5f) {
+          sound = !sound;
+          GameSound::setEnabled(sound);
+          updateRequired = true;
         } else {
           openOverlayPicker();
         }
@@ -333,12 +339,20 @@ void GamesActivity::render() {
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
 
   topButtonY = y;
-  renderer.rectangle.fill(MARGIN, y, inner, BUTTON_HEIGHT, true, true);
-  const std::string label =
-      pickingOverlay ? std::string("Cancel") : "Overlay: " + (overlay.empty() ? std::string("None") : overlay);
-  const std::string shownLabel = renderer.text.truncate(font, label.c_str(), inner - 2 * GAP);
-  renderer.text.render(font, MARGIN + (inner - renderer.text.getWidth(font, shownLabel.c_str())) / 2,
-                       y + (BUTTON_HEIGHT - renderer.text.getLineHeight(font)) / 2, shownLabel.c_str(), false);
+  // Full width "Cancel" while choosing an overlay, else Overlay (left half) and Sound (right half).
+  const auto button = [&](const int x, const int w, const std::string& label) {
+    renderer.rectangle.fill(x, y, w, BUTTON_HEIGHT, true, true);
+    const std::string shown = renderer.text.truncate(font, label.c_str(), w - 2 * GAP);
+    renderer.text.render(font, x + (w - renderer.text.getWidth(font, shown.c_str())) / 2,
+                         y + (BUTTON_HEIGHT - renderer.text.getLineHeight(font)) / 2, shown.c_str(), false);
+  };
+  if (pickingOverlay) {
+    button(MARGIN, inner, "Cancel");
+  } else {
+    const int half = (inner - GAP) / 2;
+    button(MARGIN, half, "Overlay: " + (overlay.empty() ? std::string("None") : overlay));
+    button(MARGIN + half + GAP, inner - half - GAP, sound ? "Sound: On" : "Sound: Off");
+  }
   y += BUTTON_HEIGHT + GAP;
   renderer.text.render(smallFont, MARGIN, y,
                        pickingOverlay ? "960 x 540 PNGs in /Games/Overlays. Start from Template.png."

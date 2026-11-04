@@ -9,7 +9,9 @@
 #include <AudioLinkProtocol.h>
 #include <Preferences.h>
 
+#include <algorithm>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 
@@ -107,11 +109,13 @@ bool handleHostFrame(const Type type, const uint8_t* payload, const uint16_t len
       return player::pushData(payload + 1, length - 1);
     }
     case Type::StreamStart: {
-      if (length < sizeof(audiolink::StreamStartPayload)) return true;
-      audiolink::StreamStartPayload start;
-      std::memcpy(&start, payload, sizeof(start));
+      // Protocol 2 hosts send only streamId, codec and startMs; the rest is then 0.
+      if (length < offsetof(audiolink::StreamStartPayload, sampleRate)) return true;
+      audiolink::StreamStartPayload start{};
+      std::memcpy(&start, payload, std::min<size_t>(length, sizeof(start)));
       linkStream = start.streamId;
-      player::streamStart(start.streamId, static_cast<audiolink::Codec>(start.codec), start.startMs);
+      player::streamStart(start.streamId, static_cast<audiolink::Codec>(start.codec), start.startMs, start.sampleRate,
+                          start.channels);
       return true;
     }
     case Type::StreamEnd:

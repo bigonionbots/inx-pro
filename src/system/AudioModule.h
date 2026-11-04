@@ -83,8 +83,12 @@ struct Snapshot {
   GaugeReading gauge;
 };
 
-/** Boot: logs the charger state found and puts the boost in a known (off) state. */
-void begin();
+/**
+ * Boot: logs the charger state found and puts the boost in a known (off) state. With keepBoost
+ * (game mode, which wants the module anyway) a running boost is left on, so a module powered
+ * from the reader keeps running, and its Bluetooth connection, across the restart.
+ */
+void begin(bool keepBoost = false);
 
 /** Main-loop housekeeping: charger polling, boost fault handling, auto power-off. */
 void service();

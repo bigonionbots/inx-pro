@@ -29,6 +29,10 @@
  * Positions: STREAM_START names a stream id and the book position the data starts at. The
  * module counts playedMs from that point in source samples actually sent to the output, so
  * host position = startMs + STATUS.playedMs for the matching stream id.
+ *
+ * Live streams (Codec::MuLaw, game sound): AUDIO_DATA carries MuLaw.h bytes, one per sample,
+ * and STREAM_START gives their sample rate and channel count. The module keeps such a stream close to
+ * real time: it drops blocks rather than let more than LIVE_MAX_BUFFERED_MS wait for the output.
  */
 
 #include <cstddef>
@@ -44,7 +48,7 @@ constexpr size_t CRC_BYTES = 2;
 constexpr size_t MAX_PAYLOAD = 1024;
 constexpr size_t MAX_FRAME = HEADER_BYTES + MAX_PAYLOAD + CRC_BYTES;
 constexpr uint32_t BAUD = 500000;
-constexpr uint8_t PROTOCOL_VERSION = 2;
+constexpr uint8_t PROTOCOL_VERSION = 3;
 
 /** Without an acknowledged step forward for this long the host resends its window (fallback). */
 constexpr uint32_t RESEND_TIMEOUT_MS = 1000;
@@ -56,6 +60,8 @@ constexpr uint32_t MAX_INFLIGHT_BYTES = 8192;
 constexpr uint8_t MAX_WINDOW_FRAMES = 48;
 /** Audio bytes per AUDIO_DATA frame the host should aim for. */
 constexpr size_t AUDIO_CHUNK = 512;
+/** A live stream (Codec::MuLaw) waiting for the output beyond this is dropped as it arrives. */
+constexpr uint32_t LIVE_MAX_BUFFERED_MS = 150;
 /** Module STATUS period. */
 constexpr uint32_t STATUS_PERIOD_MS = 250;
 
@@ -83,7 +89,11 @@ enum class Type : uint8_t {
   Log = 0x84,       ///< UTF-8 text, for the T5's module log
 };
 
-enum class Codec : uint8_t { Mp3 = 1, AacAdts = 2 };
+enum class Codec : uint8_t {
+  Mp3 = 1,
+  AacAdts = 2,
+  MuLaw = 3,  ///< Live PCM, MuLaw.h bytes (mono), rate in StreamStartPayload
+};
 
 enum class Output : uint8_t {
   Bluetooth = 1,
@@ -135,6 +145,9 @@ struct StreamStartPayload {
   uint8_t streamId;
   uint8_t codec;  ///< Codec
   uint32_t startMs;
+  // Protocol 3: for Codec::MuLaw (compressed codecs carry their own; send 0 for them).
+  uint32_t sampleRate;
+  uint8_t channels;
 };
 
 struct StatusPayload {
@@ -149,7 +162,7 @@ struct StatusPayload {
   uint32_t rxBuffered;  ///< Compressed bytes waiting
   uint16_t pcmBufferedMs;
   uint16_t underruns;
-  uint16_t decodeErrors;
+  uint16_t decodeErrors;  ///< For a live stream: drops (audio that arrived while too much was waiting)
   uint32_t freeHeap;
   uint8_t btAddress[6];  ///< Connected or remembered device, zeros if none
 };

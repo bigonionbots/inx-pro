@@ -10,7 +10,7 @@ inx-pro is MIT, and the games feature keeps it that way: every component is MIT 
 | Part | Component | License | Notes |
 | --- | --- | --- | --- |
 | GB / GBC core | CrankBoy's Peanut-GB, vendored in `third_party/crankboy` (VENDORED.md) | MIT | Supports GBC; SameBoy-derived parts are MIT too. inx-pro's shim stands in for its Playdate app headers. |
-| GB sound | MiniGB APU (from CrankBoy) | MIT | Built, not played yet (milestone 4). |
+| GB sound | MiniGB APU (from CrankBoy) | MIT | Played through the audio module (see Sound). |
 | NES core | [agnes](https://github.com/kgabis/agnes) | MIT | Mappers 0, 1, 2, 4 (NROM, MMC1, UxROM, MMC3). 3 and 7 to be added. No APU. |
 | Panel driver | [FastEPD](https://github.com/bitbank2/FastEPD) | Apache-2.0 | Vendored in `third_party/FastEPD` with two patches (PATCHES.md). |
 | H752-01 board support | `src/games/GameDisplay.cpp` | MIT | Built on freeink-sdk's own power hooks. |
@@ -68,6 +68,39 @@ changed are marked. Controls: an 8-way D-pad on the left, A and B on the right (
 between them presses both), SELECT and START under the game. Battery saves go next to the ROM
 as `<name>.sav` (the usual raw format), written 3 s after the game stops writing and on exit.
 
+### Sound
+
+Game sound plays through the external audio module (`docs/audio-module.md`), on whatever output it
+is set to for audiobooks: Bluetooth headphones or the wired DAC. Switch it with the **Sound**
+button at the top of the Games screen (stored in `/Games/.sound`, off by default). The volume is
+the module's, as set on the audiobook player.
+
+- With sound on, a game boot powers the module and starts the USB link (`GameSound`). A module
+  already powered from the reader stays on through the restart, so its Bluetooth connection
+  survives. While sound streams, the status line ends in `u<n> d<n>`: underruns (the output ran
+  dry) and drops (late audio thrown away) in the last 2 s, both 0 when the sound is clean. It
+  shows `snd -` while waiting for the module (it boots and reconnects Bluetooth in a few seconds).
+- The core emulates the sound hardware in its fast mode: each frame's sound comes from the
+  registers as they are at the end of the frame, at 44.1 kHz (`gbs_render_audio()`). The T5
+  filters it down to 22050 Hz and the module back up to 44.1 kHz with the same 63-tap low-pass
+  (`shared/audio_link/Resample2x.h`). Averaging pairs and interpolating linearly, the first
+  version, let square-wave harmonics fold back as crackle on some notes (12.9 dB SNR against the
+  ideal on uCity's music; the filter gets 27.5 dB, `test/gb_host/live_audio_test.cpp`). The core's half-rate option is not used: on this build path
+  it comes out as noise. `gbs_render_audio()` also asks the core for at most 256 samples per
+  call: in mono, longer calls glitch at its 256-sample chunk joins (a vendored bug the Playdate
+  never hits), which crackled on low notes. `test/gb_host/gb_audio_test.c` checks a game's music
+  and two held notes (`make_tone_rom.py`, 65 and 880 Hz) against both.
+- It is sent as G.711 µ-law, 22050 Hz mono: 22 KB/s, a little over half of what the T5 measured
+  on the ATOM Lite's bridge. IMA ADPCM would be half that, but smears the hard edges of Game Boy
+  square waves (14 dB SNR against µ-law's 37.6 dB, `MuLaw.h`).
+- It is live: late sound is dropped, not queued. The T5 keeps at most about 90 ms waiting for the
+  link, the module at most 150 ms (`LIVE_MAX_BUFFERED_MS`), so a stall costs a gap and the sound
+  never drifts behind the picture. The module starts playing with 60 ms in hand
+  (`LIVE_PRIME_MS`); the first version started at 23 ms and crackled, since both the link and
+  Bluetooth move audio in bursts. If it runs dry anyway it goes quiet until it has 60 ms again,
+  one short gap instead of a crackle. Bluetooth adds its own delay (typically 150-250 ms); the wired
+  DAC does not.
+
 ### Overlays
 
 An overlay is a 960 x 540 PNG in `/Games/Overlays` that changes how the game screen looks. It
@@ -113,4 +146,4 @@ Changes made in game are written back when leaving, so the reader comes back at 
 3. **NES** with agnes (+ mappers 3 and 7).
 4. **Speed and sound**:
    - frame pacing and partial-update tuning;
-   - game audio through the external audio module (needs a raw PCM path on the ATOM).
+   - game sound through the external audio module (done on the host side; to check on the device).
