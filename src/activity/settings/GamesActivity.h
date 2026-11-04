@@ -17,7 +17,7 @@
 /**
  * Games screen (Home -> Shortcuts -> Games). Lists the ROMs under /Games and launches game mode
  * (games/GameMode.h), which restarts the device into a boot that drives the panel directly.
- * Game Boy / Color ROMs launch from the list; NES follows. The buttons at the top pick the
+ * Game Boy / Color ROMs launch from the list. The buttons at the top pick the
  * screen overlay (games/GameOverlay.h) from /Games/Overlays and switch game sound through the
  * audio module on and off (games/GameSound.h).
  *
@@ -71,8 +71,6 @@ class GamesActivity final : public Activity {
   void openRom(size_t index) const;
   void perform();
   void menuInput();
-
-  static bool isGameBoyRom(const std::string& name);
 
   void render();
   void renderMenu();

@@ -1,6 +1,6 @@
 # Games (LilyGo T5 S3 Pro Lite, `t5s3_audio` env)
 
-Game Boy / Game Boy Color and NES games on the T5, from ROMs in `/Games` on the SD card. No games
+Game Boy / Game Boy Color games on the T5, from ROMs in `/Games` on the SD card. No games
 are included.
 
 ## Licensing: why these components
@@ -11,7 +11,6 @@ inx-pro is MIT, and the games feature keeps it that way: every component is MIT 
 | --- | --- | --- | --- |
 | GB / GBC core | CrankBoy's Peanut-GB, vendored in `third_party/crankboy` (VENDORED.md) | MIT | Supports GBC; SameBoy-derived parts are MIT too. inx-pro's shim stands in for its Playdate app headers. |
 | GB sound | MiniGB APU (from CrankBoy) | MIT | Played through the audio module (see Sound). |
-| NES core | [agnes](https://github.com/kgabis/agnes) | MIT | Mappers 0, 1, 2, 4 (NROM, MMC1, UxROM, MMC3). 3 and 7 to be added. No APU. |
 | Panel driver | [FastEPD](https://github.com/bitbank2/FastEPD) | Apache-2.0 | Vendored in `third_party/FastEPD` with two patches (PATCHES.md). |
 | H752-01 board support | `src/games/GameDisplay.cpp` | MIT | Built on freeink-sdk's own power hooks. |
 
@@ -151,7 +150,9 @@ Changes made in game are written back when leaving, so the reader comes back at 
    - the core with its shim, verified on the host against dmg-acid2 and cgb-acid2 (done);
    - on the device: ROM list, 3x dithered video on the continuous scan, touch controls and
      battery saves.
-3. **NES** with agnes (+ mappers 3 and 7).
+3. **NES**: tried and dropped. agnes (MIT) ran correctly but managed 37 fps on the T5 after
+   heavy optimisation, the fast ESP32 NES cores are GPL, and NES is beyond what the reader needs.
 4. **Speed and sound**:
    - frame pacing and partial-update tuning;
-   - game sound through the external audio module (done on the host side; to check on the device).
+   - game sound through the external audio module, with volume controls (done, checked on the
+     device).

@@ -46,15 +46,10 @@ std::string extensionOf(const std::string& name) {
 
 bool isRom(const std::string& name) {
   const std::string ext = extensionOf(name);
-  return ext == "gb" || ext == "gbc" || ext == "nes";
+  return ext == "gb" || ext == "gbc";
 }
 
 }  // namespace
-
-bool GamesActivity::isGameBoyRom(const std::string& name) {
-  const std::string ext = extensionOf(name);
-  return ext == "gb" || ext == "gbc";
-}
 
 void GamesActivity::onEnter() {
   roms.clear();
@@ -151,7 +146,7 @@ void GamesActivity::saveFavorites() const {
 
 std::vector<GamesActivity::Action> GamesActivity::menuActions() const {
   std::vector<Action> actions;
-  if (menuIndex >= 0 && isGameBoyRom(roms[static_cast<size_t>(menuIndex)])) actions.push_back(Action::Open);
+  if (menuIndex >= 0) actions.push_back(Action::Open);
   actions.push_back(Action::Delete);
   actions.push_back(Action::Favorite);
   return actions;
@@ -310,7 +305,7 @@ void GamesActivity::loop() {
             menuIndex = static_cast<int>(index);
             confirming = false;
             updateRequired = true;
-          } else if (isGameBoyRom(roms[index])) {
+          } else {
             openRom(index);
           }
         }
@@ -364,7 +359,7 @@ void GamesActivity::render() {
   y += renderer.text.getLineHeight(font) + GAP;
   listY = y;
   if (itemCount() == 0) {
-    renderer.text.render(smallFont, MARGIN, y, "None yet. Copy .gb, .gbc or .nes files to /Games.");
+    renderer.text.render(smallFont, MARGIN, y, "None yet. Copy .gb or .gbc files to /Games.");
     footerY = height;
     menuIndex = -1;
     renderer.displayBuffer();
@@ -390,7 +385,7 @@ void GamesActivity::render() {
       if (name == overlay) rowLabel += "  (in use)";
     } else {
       const std::string& rom = roms[i];
-      rowLabel = isGameBoyRom(rom) ? rom : rom + "  (NES: not yet)";
+      rowLabel = rom;
       if (favorites.count(rom)) {
         renderer.bitmap.icon(Star, MARGIN, y + (ROW_HEIGHT - STAR_SIZE) / 2, STAR_SIZE, STAR_SIZE);
         textX += STAR_SIZE + 10;
