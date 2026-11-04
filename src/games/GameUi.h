@@ -6,7 +6,8 @@
  *
  * Layout (panel pixels, 960 x 540 landscape): a 54-pixel top bar (title, LIGHT, -, +, EXIT),
  * the game area (a Game Boy screen at 3x: 480 x 432) centred under it, a bottom bar below the
- * game area, and the side columns either side of it for the on-screen controls.
+ * game area (SELECT, START, and SOUND, -, + on the right), and the side columns either side of it
+ * for the on-screen controls.
  */
 
 #if INX_HAS_GAMES
@@ -33,6 +34,16 @@ constexpr int BRIGHT_X = 725;
 constexpr int STEP_W = 105;
 constexpr int EXIT_X = 840;
 constexpr int EXIT_W = 120;
+
+/**
+ * Sound controls in the bottom bar, right of START (x and width; from BOTTOM_Y + 6 to the bottom
+ * edge - 4, like SELECT / START). SOUND shows the module's volume and mutes; - and + step it.
+ */
+constexpr int SOUND_X = 704;
+constexpr int SOUND_W = 112;
+constexpr int QUIETER_X = 822;
+constexpr int LOUDER_X = 892;
+constexpr int SOUND_STEP_W = 64;
 
 /**
  * Game Boy on-screen controls. scripts/make_game_overlay_template.py draws the same layout into
@@ -68,14 +79,29 @@ void text(FASTEPD& epd, int x, int y, const char* s);
 /** Width of `s` in FONT_12x16. */
 int textWidth(const char* s);
 
-enum class BarButton : uint8_t { None, Light, Dimmer, Brighter, Exit };
+enum class BarButton : uint8_t { None, Light, Dimmer, Brighter, Exit, Sound, Quieter, Louder };
+
+/** The sound buttons are in the bottom bar: redraw and push those rows for them. */
+inline bool isSoundButton(const BarButton b) {
+  return b == BarButton::Sound || b == BarButton::Quieter || b == BarButton::Louder;
+}
 
 /** Draws the top bar: two short title lines on the left, the light controls and EXIT on the right. */
 void drawBar(FASTEPD& epd, const char* line1, const char* line2);
 
+/** Draws the sound controls (SOUND readout, -, +) in the bottom bar. */
+void drawSoundControls(FASTEPD& epd);
+
 /**
- * Top-bar touch handling. Each button acts once per press. LIGHT / - / + are applied here (and
- * the LIGHT readout redrawn into the buffer); the caller pushes rows 0..BAR_H-1 to the panel
+ * Redraws the SOUND readout if what it shows changed (the module reported its volume, or sound
+ * came up). Returns true when it did: then push rows BOTTOM_Y..HEIGHT-1.
+ */
+bool refreshSoundReadout(FASTEPD& epd);
+
+/**
+ * Touch handling for the bar buttons (the top bar and the sound controls). Each button acts once
+ * per press. LIGHT / - / + and SOUND / - / + are applied here and their readout redrawn into the
+ * buffer; the caller pushes the rows (0..BAR_H-1, or BOTTOM_Y.. for isSoundButton()) to the panel
  * when update() returns one of them, and leaves game mode on Exit.
  */
 class BarInput {

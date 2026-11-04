@@ -72,8 +72,13 @@ as `<name>.sav` (the usual raw format), written 3 s after the game stops writing
 
 Game sound plays through the external audio module (`docs/audio-module.md`), on whatever output it
 is set to for audiobooks: Bluetooth headphones or the wired DAC. Switch it with the **Sound**
-button at the top of the Games screen (stored in `/Games/.sound`, off by default). The volume is
-the module's, as set on the audiobook player.
+button at the top of the Games screen (stored in `/Games/.sound`, off by default).
+
+**Volume** is the module's own, shared with the audiobook player and kept by the module. In a
+game, the bottom bar's right corner has **SOUND** (shows the volume; tap to mute and unmute) and
+**-** / **+** (steps of 10). SOUND shows `OFF` with sound off and `--` until the module reports
+its volume. A change is sent by GameSound's sender task, so it never holds up the game.
+
 
 - With sound on, a game boot powers the module and starts the USB link (`GameSound`). A module
   already powered from the reader stays on through the restart, so its Bluetooth connection
@@ -110,12 +115,15 @@ at the top of the Games screen (stored in `/Games/.overlay`).
 - Pixels at least 50% opaque are drawn: dark ones black, light ones white, greys as a 4x4
   dither. More transparent pixels leave the normal screen showing.
 - The game screen (480 x 432 at 240, 54) always shows the game; the overlay is not drawn there.
-- The LIGHT readout and the status line are redrawn while playing, and the overlay is drawn
-  over them again each time, so covering them hides them.
+- The LIGHT and SOUND readouts and the status line are redrawn while playing, and the overlay is
+  drawn over them again each time, so covering them hides them. (The example leaves a clear
+  window over SOUND.)
+- Template.png and Example.png are only written when missing: delete them from the card to get
+  the current layout's versions.
 
 **Template.** The Games screen writes `/Games/Overlays/Template.png` when it is missing (also in
 the repository as `docs/games/overlay-template.png`). It marks the game screen, the top-bar
-buttons, the D-pad, A and B with their touch reach, and SELECT / START. Everything in it is 40%
+buttons, the D-pad, A and B with their touch reach, SELECT / START, and the sound controls. Everything in it is 40%
 opaque, so the template itself draws nothing: paint opaque artwork over the guides, save as PNG
 under a new name, and pick it. Because the template draws nothing, choosing it looks the same as
 None. `Example.png` (`docs/games/overlay-example.png`) is written next to it: a finished overlay

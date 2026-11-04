@@ -32,6 +32,22 @@ void setEnabled(bool on);
 /** Game mode: starts the module and the link if sound is on. Returns whether it is. */
 bool begin();
 
+/** Sound is on and the module was started (begin() returned true). */
+bool active();
+
+/**
+ * The module's volume, 0..100: as last set here, else as the module reports it. -1 while not
+ * known (sound off, or no STATUS from the module yet).
+ */
+int volume();
+
+/** Volume steps of VOLUME_STEP (0..100). Sent by the sender task, so they never block the game. */
+constexpr int VOLUME_STEP = 10;
+void stepVolume(bool up);
+
+/** Mute, or back to the volume before muting. */
+void toggleMute();
+
 /** Housekeeping (the module's power checks); call every frame. */
 void service();
 

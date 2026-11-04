@@ -101,6 +101,13 @@ def template(c):
         draw.rectangle([c[x], top, c[x] + c["SMALL_W"] - 1, bottom - 1], outline=red, width=2)
         label((c[x] + c["SMALL_W"] // 2, (top + bottom) // 2), name)
 
+    # Sound: the readout (redrawn by the firmware, like LIGHT) and the volume steps.
+    for name, x, w in (("SOUND", "SOUND_X", "SOUND_W"), ("-", "QUIETER_X", "SOUND_STEP_W"),
+                       ("+", "LOUDER_X", "SOUND_STEP_W")):
+        draw.rectangle([c[x], top, c[x] + c[w] - 1, bottom - 1], outline=red, width=2)
+        label((c[x] + c[w] // 2, (top + bottom) // 2 - (8 if name == "SOUND" else 0)), name)
+    label((c["SOUND_X"] + c["SOUND_W"] // 2, (top + bottom) // 2 + 10), "volume", f=small)
+
     # Game screen, drawn last so it covers the touch rings: the overlay is never drawn there.
     ax, ay, aw, ah = c["AREA_X"], c["AREA_Y"], c["AREA_W"], c["AREA_H"]
     draw.rectangle([ax, ay, ax + aw - 1, ay + ah - 1], fill=grey)
@@ -141,6 +148,13 @@ def example(c):
     for name, x in (("SELECT", "SELECT_X"), ("START", "START_X")):
         draw.rounded_rectangle([c[x], top, c[x] + c["SMALL_W"], HEIGHT - 8], radius=14, fill=black)
         draw.text((c[x] + c["SMALL_W"] // 2, (top + HEIGHT - 8) // 2), name, fill=white, font=small, anchor="mm")
+    # Sound: the firmware draws the SOUND readout (the volume), so leave a clear window over it, as
+    # the top bar is left clear for LIGHT; - and + are artwork.
+    sound_top = c["BOTTOM_Y"] + 6
+    draw.rectangle([c["SOUND_X"], sound_top, c["SOUND_X"] + c["SOUND_W"] - 1, HEIGHT - 5], fill=(0, 0, 0, 0))
+    for name, x in (("-", "QUIETER_X"), ("+", "LOUDER_X")):
+        draw.rounded_rectangle([c[x], top, c[x] + c["SOUND_STEP_W"] - 1, HEIGHT - 8], radius=14, fill=black)
+        draw.text((c[x] + c["SOUND_STEP_W"] // 2, (top + HEIGHT - 8) // 2), name, fill=white, font=big, anchor="mm")
     draw.text((c["DPAD_X"], c["BOTTOM_Y"] + 20), "inx-pro", fill=black, font=big, anchor="mm")
     return image
 

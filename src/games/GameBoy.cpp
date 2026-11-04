@@ -282,6 +282,7 @@ void run(const char* romPath) {
   GameUi::drawBar(epd, title, subtitle);
   epd.drawRect(AREA_X - 2, AREA_Y, AREA_W + 4, AREA_H, BBEP_BLACK);
   drawControls(epd);
+  GameUi::drawSoundControls(epd);
   GameOverlay::apply(epd, 0, 0, GameDisplay::WIDTH, GameDisplay::HEIGHT);
   epd.fullUpdate(CLEAR_FAST, true);
   if (!GameVideo::start()) {
@@ -309,7 +310,14 @@ void run(const char* romPath) {
     const GameUi::BarButton button = bar.update(epd, touches, count);
     const bool leave = button == GameUi::BarButton::Exit || gpio.wasPressed(HalGPIO::BTN_POWER);
     if (leave) break;
-    if (button != GameUi::BarButton::None) {
+    // The sound readout also changes by itself (the module reports its volume); check it now and then.
+    const bool soundChanged =
+        GameUi::isSoundButton(button) || (statsFrames % 15 == 0 && GameUi::refreshSoundReadout(epd));
+    if (soundChanged) {
+      GameOverlay::apply(epd, GameUi::SOUND_X, BOTTOM_Y, GameDisplay::WIDTH - GameUi::SOUND_X,
+                         GameDisplay::HEIGHT - BOTTOM_Y);
+      GameVideo::markRows(BOTTOM_Y, GameDisplay::HEIGHT - 1);
+    } else if (button != GameUi::BarButton::None) {
       GameOverlay::apply(epd, 0, 0, GameDisplay::WIDTH, BAR_H);
       GameVideo::markRows(0, BAR_H - 1);
     }

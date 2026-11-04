@@ -41,11 +41,14 @@ constexpr size_t SEND_CHUNK = audiolink::AUDIO_CHUNK;
 constexpr uint32_t SENDER_STACK = 4096;
 constexpr int SENDER_PRIORITY = 3;
 
-bool active = false;
+bool active_ = false;
 StreamBufferHandle_t queue = nullptr;
 std::atomic<bool> streaming{false};  // a stream is open on the module
 std::atomic<uint8_t> streamId{0};    // its id
 std::atomic<uint32_t> dropped{0};    // times audio was dropped because the queue was full
+std::atomic<int> wantedVolume{-1};   // set from the game loop; -1 = not changed in this game
+int sentVolume = -1;                 // sender task only
+int volumeBeforeMute = 50;           // game loop only
 
 // Game loop only: the 2:1 low-pass decimator (Resample2x.h explains why not pair averages), and
 // the encode buffer.
@@ -80,6 +83,11 @@ void senderTask(void*) {
       AudioModule::logf("Game sound: stream %u started", streamId.load());
       xStreamBufferReset(queue);  // start from now, not from what piled up meanwhile
     }
+    const int wanted = wantedVolume;
+    if (wanted >= 0 && wanted != sentVolume) {
+      const uint8_t value = static_cast<uint8_t>(wanted);
+      if (AudioLink::send(audiolink::Type::SetVolume, &value, 1, 200)) sentVolume = wanted;
+    }
     const size_t got = xStreamBufferReceive(queue, chunk, sizeof(chunk), pdMS_TO_TICKS(50));
     if (got == 0) continue;
     // A short timeout: audio that cannot go out soon is better dropped than sent late.
@@ -111,7 +119,7 @@ void setEnabled(const bool on) {
 #if INX_HAS_AUDIO_MODULE
 
 bool begin() {
-  if (active || !enabled()) return active;
+  if (active_ || !enabled()) return active_;
   AudioModule::begin(true);
   const AudioModule::PowerResult power = AudioModule::setPower(true);
   // A module with its own power (or on a charger's VBUS) works without the boost.
@@ -129,16 +137,44 @@ bool begin() {
     INX_SERIAL.println("[GAME] sound: no memory for the sender");
     return false;
   }
-  active = true;
+  active_ = true;
   return true;
 }
 
+bool active() { return active_; }
+
+int volume() {
+  if (!active_) return -1;
+  const int wanted = wantedVolume;
+  if (wanted >= 0) return wanted;
+  const AudioLink::ModuleStatus module = AudioLink::status();
+  return module.valid ? module.status.volume : -1;
+}
+
+void stepVolume(const bool up) {
+  const int now = volume();
+  if (now < 0) return;
+  const int next = now + (up ? VOLUME_STEP : -VOLUME_STEP);
+  wantedVolume = next < 0 ? 0 : (next > 100 ? 100 : next);
+}
+
+void toggleMute() {
+  const int now = volume();
+  if (now < 0) return;
+  if (now > 0) {
+    volumeBeforeMute = now;
+    wantedVolume = 0;
+  } else {
+    wantedVolume = volumeBeforeMute > 0 ? volumeBeforeMute : 50;
+  }
+}
+
 void service() {
-  if (active) AudioModule::service();
+  if (active_) AudioModule::service();
 }
 
 void push(const int16_t* samples, const size_t count) {
-  if (!active || !streaming) return;
+  if (!active_ || !streaming) return;
   size_t out = 0;
   for (size_t i = 0; i < count; ++i) {
     int16_t sample = 0;
@@ -157,7 +193,7 @@ void push(const int16_t* samples, const size_t count) {
 }
 
 const char* statusText() {
-  if (!active) return "";
+  if (!active_) return "";
   if (!streaming) return "snd -";
   // Underruns and drops since the last call (the status line's 2 s), from the module's STATUS
   // plus drops on this side; for telling a clean stream from a crackly one.
@@ -177,9 +213,9 @@ const char* statusText() {
 }
 
 void end() {
-  if (!active) return;
+  if (!active_) return;
   // Ends the module's stream; the restart that follows stops the link and the boost.
-  active = false;
+  active_ = false;
   const uint8_t id = streamId;
   if (streaming) AudioLink::send(audiolink::Type::StreamStop, &id, 1, 100);
 }
@@ -187,6 +223,10 @@ void end() {
 #else  // no audio module in this build: the setting is kept, but there is nothing to play on
 
 bool begin() { return false; }
+bool active() { return false; }
+int volume() { return -1; }
+void stepVolume(bool) {}
+void toggleMute() {}
 void service() {}
 void push(const int16_t*, size_t) {}
 const char* statusText() { return ""; }
