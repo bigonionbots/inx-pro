@@ -10,6 +10,7 @@
 #include <GfxRenderer.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <memory>
 #include <numeric>
@@ -32,6 +33,10 @@ constexpr int GAP = 12;
 constexpr int BUTTON_HEIGHT = 76;
 constexpr int ROW_HEIGHT = UiLayout::LIST_ITEM_HEIGHT;
 constexpr int BOOK_ROW_HEIGHT = 92;
+/** Home shelves: books asked for per shelf, and how a shelf row's index is packed. */
+constexpr int SHELF_BOOKS = 4;
+constexpr int SHELF_INDEX = 64;
+constexpr int SHELF_ROW_HEIGHT = 84;
 constexpr unsigned long DOWNLOAD_REDRAW_MS = 3000;
 constexpr uint32_t WORKER_STACK = 12288;  // TLS
 
@@ -165,6 +170,12 @@ void AbsActivity::loadLibraries() {
       "Loading libraries...", [this](std::string& failure) { Abs::libraries(libraries, failure); }, View::Libraries);
 }
 
+void AbsActivity::loadHome() {
+  startWork(
+      "Loading...", [this](std::string& failure) { Abs::shelves(library.id, SHELF_BOOKS, shelves, failure); },
+      View::Home);
+}
+
 void AbsActivity::loadBooks() {
   startWork(
       "Loading books...",
@@ -215,8 +226,7 @@ void AbsActivity::loop() {
     if (view == View::Detail) refreshLocalState();
     if (view == View::Libraries && error.empty() && libraries.size() == 1) {
       library = libraries.front();
-      page = 0;
-      loadBooks();
+      loadHome();
     }
     if (view == View::Books) downloaded = AbsLocal::listDownloaded();
     updateRequired = true;
@@ -244,9 +254,16 @@ void AbsActivity::loop() {
         showView(View::Detail);
         return;
       case View::Detail:
-        showView(View::Books);
+        if (detailFrom == View::Home) {
+          loadHome();  // again: Continue Listening may have changed while the book was open
+        } else {
+          showView(View::Books);
+        }
         return;
       case View::Books:
+        showView(View::Home);
+        return;
+      case View::Home:
         if (libraries.size() > 1) {
           showView(View::Libraries);
           return;
@@ -326,12 +343,30 @@ void AbsActivity::run(const Action action, const int index) {
     case Action::OpenLibrary:
       if (index >= 0 && index < static_cast<int>(libraries.size())) {
         library = libraries[index];
-        page = 0;
-        loadBooks();
+        loadHome();
       }
       return;
     case Action::OpenBook:
-      if (index >= 0 && index < static_cast<int>(books.size())) loadDetail(books[index].id);
+      if (index >= 0 && index < static_cast<int>(books.size())) {
+        detailFrom = View::Books;
+        loadDetail(books[index].id);
+      }
+      return;
+    case Action::OpenShelfBook: {
+      const size_t shelf = static_cast<size_t>(index / SHELF_INDEX);
+      const size_t row = static_cast<size_t>(index % SHELF_INDEX);
+      if (shelf < shelves.size() && row < shelves[shelf].items.size()) {
+        detailFrom = View::Home;
+        loadDetail(shelves[shelf].items[row].id);
+      }
+      return;
+    }
+    case Action::AllBooks:
+      page = 0;
+      loadBooks();
+      return;
+    case Action::OpenLibraries:
+      showView(View::Libraries);
       return;
     case Action::PageUp:
       if (page > 0) {
@@ -405,9 +440,9 @@ void AbsActivity::row(const int y, const int height, const Action action, const 
 void AbsActivity::render() {
   targets.clear();
   renderer.clearScreen();
-  const char* titles[] = {"Audiobookshelf", "Libraries", "Books", "Book", "Download"};
-  const char* title =
-      view == View::Books && !library.name.empty() ? library.name.c_str() : titles[static_cast<int>(view)];
+  const char* titles[] = {"Audiobookshelf", "Libraries", "Books", "Book", "Download", "Audiobookshelf"};
+  const bool named = (view == View::Books || view == View::Home) && !library.name.empty() && libraries.size() > 1;
+  const char* title = named ? library.name.c_str() : titles[static_cast<int>(view)];
   const int top = SubPage::header(renderer, title) + 16;
   const int font = systemFontId();
   const int width = renderer.getScreenWidth();
@@ -463,6 +498,9 @@ void AbsActivity::render() {
         break;
       case View::Books:
         renderBooks(y);
+        break;
+      case View::Home:
+        renderHome(y);
         break;
       case View::Detail:
         renderDetail(y);
@@ -553,6 +591,56 @@ void AbsActivity::renderBooks(int y) {
   }
   if (libraries.size() <= 1)
     button(MARGIN + 2 * (third + GAP), pagerY, third, BUTTON_HEIGHT, "Sign out", Action::SignOut);
+}
+
+void AbsActivity::renderHome(int y) {
+  const int width = renderer.getScreenWidth();
+  const int inner = width - 2 * MARGIN;
+  const int font = systemFontId();
+  constexpr int labelFont = MONTSERRAT_10_FONT_ID;
+  constexpr int smallFont = MONTSERRAT_10_FONT_ID;
+  const int buttonsY = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
+
+  if (shelves.empty()) {
+    renderer.text.render(font, MARGIN, y, "Nothing in progress or recently added.");
+  }
+  for (size_t s = 0; s < shelves.size(); ++s) {
+    const Abs::Shelf& shelf = shelves[s];
+    const int labelH = renderer.text.getLineHeight(labelFont) + 8;
+    // Each shelf shows what fits; one that would not get a single row is left for "All books".
+    if (y + labelH + SHELF_ROW_HEIGHT > buttonsY - GAP) break;
+    std::string label = shelf.label;
+    std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c) { return std::toupper(c); });
+    renderer.text.render(labelFont, MARGIN, y + 4, label.c_str(), true, EpdFontFamily::BOLD);
+    y += labelH;
+    for (size_t i = 0; i < shelf.items.size() && y + SHELF_ROW_HEIGHT <= buttonsY - GAP; ++i) {
+      const Abs::ItemSummary& b = shelf.items[i];
+      renderer.text.render(font, MARGIN, y + 8, renderer.text.truncate(font, b.title.c_str(), inner).c_str(), true,
+                           EpdFontFamily::BOLD);
+      // Progress first, so a long author name truncates instead of it.
+      std::string info;
+      if (b.finished) {
+        info = "Finished  -  ";
+      } else if (b.progress > 0.0f) {
+        info = std::to_string(static_cast<int>(b.progress * 100)) + "%  -  ";
+      }
+      if (!b.author.empty()) info += b.author + "  -  ";
+      info += formatDuration(b.durationSec);
+      const int infoY = y + 12 + renderer.text.getLineHeight(font);
+      renderer.text.render(smallFont, MARGIN, infoY, renderer.text.truncate(smallFont, info.c_str(), inner).c_str());
+      row(y, SHELF_ROW_HEIGHT, Action::OpenShelfBook, static_cast<int>(s) * SHELF_INDEX + static_cast<int>(i));
+      y += SHELF_ROW_HEIGHT;
+    }
+    y += GAP;
+  }
+
+  const int half = (inner - GAP) / 2;
+  button(MARGIN, buttonsY, half, BUTTON_HEIGHT, "All books", Action::AllBooks, 0, true);
+  if (libraries.size() > 1) {
+    button(MARGIN + half + GAP, buttonsY, inner - half - GAP, BUTTON_HEIGHT, "Libraries", Action::OpenLibraries);
+  } else {
+    button(MARGIN + half + GAP, buttonsY, inner - half - GAP, BUTTON_HEIGHT, "Sign out", Action::SignOut);
+  }
 }
 
 void AbsActivity::renderDetail(int y) {

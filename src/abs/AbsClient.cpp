@@ -432,6 +432,45 @@ bool libraries(std::vector<Library>& out, std::string& error) {
   return true;
 }
 
+/** The user's progress for the markers in a list of books: one request for all of them. */
+static void addProgress(std::vector<ItemSummary*> books) {
+  Response me;
+  std::string ignored;
+  if (books.empty() || !api(HTTP_METHOD_GET, "/api/me", "", me, ignored)) return;
+  JsonDocument meFilter;
+  JsonObject progressFilter = meFilter["mediaProgress"][0].to<JsonObject>();
+  progressFilter["libraryItemId"] = true;
+  progressFilter["progress"] = true;
+  progressFilter["isFinished"] = true;
+  JsonDocument meDoc;
+  if (deserializeJson(meDoc, me.body, DeserializationOption::Filter(meFilter)) != DeserializationError::Ok) return;
+  for (JsonObject p : meDoc["mediaProgress"].as<JsonArray>()) {
+    const std::string id = p["libraryItemId"] | "";
+    for (ItemSummary* item : books) {
+      if (item->id != id) continue;
+      item->progress = p["progress"] | 0.0f;
+      item->finished = p["isFinished"] | false;
+    }
+  }
+}
+
+static void addProgress(std::vector<ItemSummary>& books) {
+  std::vector<ItemSummary*> all;
+  for (ItemSummary& item : books) all.push_back(&item);
+  addProgress(all);
+}
+
+/** A minified library item (the items list and the shelves both send these). */
+static ItemSummary summaryOf(JsonObject entry) {
+  ItemSummary item;
+  item.id = entry["id"] | "";
+  item.title = entry["media"]["metadata"]["title"] | "";
+  item.author = entry["media"]["metadata"]["authorName"] | "";
+  item.durationSec = static_cast<uint32_t>(entry["media"]["duration"] | 0.0);
+  item.sizeBytes = entry["media"]["size"] | 0ull;
+  return item;
+}
+
 bool items(const std::string& libraryId, const int page, const int perPage, std::vector<ItemSummary>& out, int& total,
            std::string& error) {
   Response response;
@@ -453,37 +492,46 @@ bool items(const std::string& libraryId, const int page, const int perPage, std:
   }
   total = doc["total"] | 0;
   out.clear();
-  for (JsonObject entry : doc["results"].as<JsonArray>()) {
-    ItemSummary item;
-    item.id = entry["id"] | "";
-    item.title = entry["media"]["metadata"]["title"] | "";
-    item.author = entry["media"]["metadata"]["authorName"] | "";
-    item.durationSec = static_cast<uint32_t>(entry["media"]["duration"] | 0.0);
-    item.sizeBytes = entry["media"]["size"] | 0ull;
-    out.push_back(item);
-  }
+  for (JsonObject entry : doc["results"].as<JsonArray>()) out.push_back(summaryOf(entry));
 
-  // The user's progress for the markers in the list. One request for the whole page.
-  Response me;
-  std::string ignored;
-  if (api(HTTP_METHOD_GET, "/api/me", "", me, ignored)) {
-    JsonDocument meFilter;
-    JsonObject progressFilter = meFilter["mediaProgress"][0].to<JsonObject>();
-    progressFilter["libraryItemId"] = true;
-    progressFilter["progress"] = true;
-    progressFilter["isFinished"] = true;
-    JsonDocument meDoc;
-    if (deserializeJson(meDoc, me.body, DeserializationOption::Filter(meFilter)) == DeserializationError::Ok) {
-      for (JsonObject p : meDoc["mediaProgress"].as<JsonArray>()) {
-        const std::string id = p["libraryItemId"] | "";
-        for (ItemSummary& item : out) {
-          if (item.id != id) continue;
-          item.progress = p["progress"] | 0.0f;
-          item.finished = p["isFinished"] | false;
-        }
-      }
-    }
+  addProgress(out);
+  return true;
+}
+
+bool shelves(const std::string& libraryId, const int perShelf, std::vector<Shelf>& out, std::string& error) {
+  Response response;
+  const std::string path = "/api/libraries/" + libraryId + "/personalized?limit=" + std::to_string(perShelf);
+  if (!api(HTTP_METHOD_GET, path, "", response, error)) return false;
+  JsonDocument filter;
+  JsonObject shelf = filter[0].to<JsonObject>();
+  shelf["id"] = true;
+  shelf["label"] = true;
+  shelf["type"] = true;
+  JsonObject entity = shelf["entities"][0].to<JsonObject>();
+  entity["id"] = true;
+  entity["media"]["metadata"]["title"] = true;
+  entity["media"]["metadata"]["authorName"] = true;
+  entity["media"]["duration"] = true;
+  entity["media"]["size"] = true;
+  JsonDocument doc;
+  if (deserializeJson(doc, response.body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) {
+    error = "Unexpected reply from the server";
+    return false;
   }
+  out.clear();
+  for (JsonObject s : doc.as<JsonArray>()) {
+    if (std::string(s["type"] | "") != "book") continue;
+    Shelf next;
+    next.id = s["id"] | "";
+    next.label = s["label"] | "";
+    for (JsonObject entry : s["entities"].as<JsonArray>()) next.items.push_back(summaryOf(entry));
+    if (!next.items.empty()) out.push_back(std::move(next));
+  }
+  std::vector<ItemSummary*> all;
+  for (Shelf& s : out) {
+    for (ItemSummary& item : s.items) all.push_back(&item);
+  }
+  addProgress(all);
   return true;
 }
 

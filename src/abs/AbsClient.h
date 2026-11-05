@@ -38,6 +38,13 @@ struct ItemSummary {
   bool finished = false;
 };
 
+/** A home-page shelf of books (GET /api/libraries/:id/personalized). */
+struct Shelf {
+  std::string id;     ///< continue-listening, continue-series, recently-added, listen-again, ...
+  std::string label;  ///< as the server names it, e.g. "Continue Listening"
+  std::vector<ItemSummary> items;
+};
+
 struct Track {
   int index = 0;
   std::string contentUrl;  ///< server-relative, /api/items/<id>/file/<ino>
@@ -88,6 +95,11 @@ bool libraries(std::vector<Library>& out, std::string& error);
 /** One page of a book library, sorted by title. */
 bool items(const std::string& libraryId, int page, int perPage, std::vector<ItemSummary>& out, int& total,
            std::string& error);
+/**
+ * The library's home shelves of books, up to `perShelf` each, in the server's order, with the
+ * user's progress. Shelves of other things (series, authors) and empty ones are left out.
+ */
+bool shelves(const std::string& libraryId, int perShelf, std::vector<Shelf>& out, std::string& error);
 bool item(const std::string& itemId, ItemDetail& out, std::string& error);
 bool progress(const std::string& itemId, Progress& out, std::string& error);
 bool updateProgress(const std::string& itemId, uint32_t currentMs, uint32_t durationMs, bool finished,

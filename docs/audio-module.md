@@ -195,6 +195,12 @@ the framework's `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC` would. A failed connection s
 not found (with the DNS server asked), host unreachable, certificate not trusted, or the
 mbedTLS error and free internal RAM.
 
+**Home.** Signed in, the screen opens on the library's shelves, as the server's home page has
+them (`GET /api/libraries/:id/personalized`): Continue Listening, Continue Series, Recently Added,
+Listen Again, a few books each with the listening progress. **All books** is the full list by
+title; with more than one library, **Libraries** switches. Back from a book opened on a shelf
+reloads them, so Continue Listening is current.
+
 **Sign-in.** The server URL, username and password are entered once. The client uses the v2.26+
 JWT scheme, checked against the v2.37.1 server source:
 - `POST /login` with `x-return-tokens: true` returns `user.accessToken` and `user.refreshToken`.

@@ -38,7 +38,8 @@ class AbsActivity final : public ActivityWithSubactivity {
   bool preventAutoSleep() override;
 
  private:
-  enum class View : uint8_t { SignIn, Libraries, Books, Detail, Download };
+  /** Home: the library's shelves (Continue Listening, Recently Added, ...), the start view. */
+  enum class View : uint8_t { SignIn, Libraries, Books, Detail, Download, Home };
   enum class Action : uint8_t {
     EditServer,
     EditUser,
@@ -49,6 +50,9 @@ class AbsActivity final : public ActivityWithSubactivity {
     SignOut,
     OpenLibrary,
     OpenBook,
+    OpenShelfBook,  ///< index = shelf * SHELF_INDEX + row
+    AllBooks,
+    OpenLibraries,
     PageUp,
     PageDown,
     Stream,
@@ -95,6 +99,8 @@ class AbsActivity final : public ActivityWithSubactivity {
   std::vector<Abs::Library> libraries;
   Abs::Library library;
   std::vector<Abs::ItemSummary> books;
+  std::vector<Abs::Shelf> shelves;
+  View detailFrom = View::Books;  ///< where Back from a book goes: the list it was opened from
   int page = 0;
   int total = 0;
   Abs::ItemDetail detail;
@@ -112,6 +118,7 @@ class AbsActivity final : public ActivityWithSubactivity {
   void requestWifi();
   void loadLibraries();
   void loadBooks();
+  void loadHome();
   void loadDetail(const std::string& itemId);
   void refreshLocalState();
   void editField(const char* title, std::string& field, bool secret);
@@ -120,6 +127,7 @@ class AbsActivity final : public ActivityWithSubactivity {
   void renderSignIn(int y);
   void renderLibraries(int y);
   void renderBooks(int y);
+  void renderHome(int y);
   void renderDetail(int y);
   void renderDownload(int y);
   void button(int x, int y, int w, int h, const char* label, Action action, int index = 0, bool filled = false);
