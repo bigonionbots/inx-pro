@@ -27,6 +27,12 @@ extern "C" {
 
 namespace {
 constexpr int LIST_ITEM_HEIGHT = Page::LIST_ITEM_HEIGHT;
+/** Rescan button, in the strip the network list leaves free at the bottom of the screen. */
+constexpr int RESCAN_HEIGHT = 60;
+constexpr int RESCAN_BOTTOM_MARGIN = 14;
+constexpr int RESCAN_SIDE_MARGIN = 20;
+
+int rescanTop(const int screenHeight) { return screenHeight - RESCAN_BOTTOM_MARGIN - RESCAN_HEIGHT; }
 constexpr uint32_t scanMaxMs = 120;
 // Wi-Fi renders translated labels and may resolve the first non-ASCII glyph by
 // loading a streamed language font. TextRender also uses a bounded glyph buffer
@@ -425,7 +431,10 @@ bool WifiSelectionActivity::handleTouchInput() {
       }
     }
 
-    if (networks.empty() && tapY >= listStartY) {
+    // Rescan: the button at the bottom, or (no networks yet) anywhere under the header.
+    const bool rescanHit = tapY >= rescanTop(screenHeight) && tapY < screenHeight - RESCAN_BOTTOM_MARGIN;
+    if (rescanHit || (networks.empty() && tapY >= listStartY)) {
+      INX_SERIAL.printf("[%lu] [WIFI] rescan\n", millis());
       startWifiScan();
       return true;
     }
@@ -683,7 +692,7 @@ void WifiSelectionActivity::renderNetworkList(int screenWidth, int screenHeight,
   if (networks.empty()) {
     const int centerY = listStartY + (visibleAreaHeight / 2);
     renderer.text.centered(MONTSERRAT_10_FONT_ID, centerY - 20, "No networks found");
-    renderer.text.centered(MONTSERRAT_10_FONT_ID, centerY + 10, "Press Connect to scan again");
+    renderer.text.centered(MONTSERRAT_10_FONT_ID, centerY + 10, "Tap Rescan or press Connect to scan again");
   } else {
     const int maxVisibleNetworks = visibleAreaHeight / LIST_ITEM_HEIGHT;
 
@@ -744,6 +753,15 @@ void WifiSelectionActivity::renderNetworkList(int screenWidth, int screenHeight,
     renderer.text.render(MONTSERRAT_8_FONT_ID, 20, screenHeight - 90, countStr);
     renderer.text.render(MONTSERRAT_8_FONT_ID, 20, screenHeight - 105, cachedMacAddress.c_str());
   }
+
+  // Rescan: networks come and go (a phone hotspot switched on after the scan, say).
+  const int rescanY = rescanTop(screenHeight);
+  const int rescanW = screenWidth - 2 * RESCAN_SIDE_MARGIN;
+  renderer.rectangle.render(RESCAN_SIDE_MARGIN, rescanY, rescanW, RESCAN_HEIGHT, true, true);
+  const char* rescanLabel = LanguageManager::translateText("Rescan");
+  renderer.text.render(MONTSERRAT_10_FONT_ID,
+                       RESCAN_SIDE_MARGIN + (rescanW - renderer.text.getWidth(MONTSERRAT_10_FONT_ID, rescanLabel)) / 2,
+                       rescanY + (RESCAN_HEIGHT - renderer.text.getLineHeight(MONTSERRAT_10_FONT_ID)) / 2, rescanLabel);
 
   const auto labels = mappedInput.mapLabels("« Back", "Connect", "", "");
 }
