@@ -8,6 +8,10 @@
  * release() drops the count and turns Wi-Fi off once nobody needs it, but only if acquire()
  * turned it on (Wi-Fi someone else started stays up). The saved networks come from the SD card,
  * so prepare() loads them on the main loop; acquire() itself may run on any task.
+ *
+ * Screens do not rely on acquire() to get online: they open the Wi-Fi picker when Wi-Fi is down
+ * (as every network screen does) and then adopt() what it connected. acquire()'s silent tries of
+ * the saved networks are for background work (streaming, progress sync) with no screen to ask.
  */
 
 #if INX_HAS_AUDIO_MODULE
@@ -23,6 +27,10 @@ bool hasSavedNetworks();
 bool acquire(std::string& error);
 void release();
 bool connected();
+/** The Wi-Fi picker connected for us: turn it off again with the last release(). Main loop. */
+void adopt();
+/** Turns Wi-Fi off unless something holds it (after a cancelled picker). Main loop. */
+void offIfUnused();
 
 /** RAII user of the connection. */
 class Use {

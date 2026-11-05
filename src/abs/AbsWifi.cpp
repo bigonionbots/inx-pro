@@ -94,6 +94,24 @@ bool acquire(std::string& error) {
   return false;
 }
 
+void adopt() {
+  ensureLock();
+  xSemaphoreTakeRecursive(lock, portMAX_DELAY);
+  if (WiFi.status() == WL_CONNECTED) turnedOn = true;
+  xSemaphoreGiveRecursive(lock);
+}
+
+void offIfUnused() {
+  ensureLock();
+  xSemaphoreTakeRecursive(lock, portMAX_DELAY);
+  if (users == 0) {
+    WiFi.disconnect(false);
+    WiFi.mode(WIFI_OFF);
+    turnedOn = false;
+  }
+  xSemaphoreGiveRecursive(lock);
+}
+
 void release() {
   ensureLock();
   xSemaphoreTakeRecursive(lock, portMAX_DELAY);

@@ -45,6 +45,7 @@ class AbsActivity final : public ActivityWithSubactivity {
     EditPassword,
     SignIn,
     WifiSettings,
+    RetryWifi,
     SignOut,
     OpenLibrary,
     OpenBook,
@@ -80,6 +81,15 @@ class AbsActivity final : public ActivityWithSubactivity {
   std::atomic<bool> busy{false};
   std::atomic<bool> resultReady{false};
   std::atomic<bool> wifiHeld{false};
+  /** Network work waiting for the Wi-Fi picker (startWork() found Wi-Fi down). */
+  struct PendingWork {
+    std::string text;
+    std::function<void(std::string& error)> work;
+    View nextView = View::SignIn;
+  };
+  PendingWork pending;
+  bool hasPending = false;
+  bool wifiNeeded = false;  ///< the picker was cancelled: show only the message and Connect
   std::string busyText;
   std::string error;
   std::vector<Abs::Library> libraries;
@@ -95,7 +105,11 @@ class AbsActivity final : public ActivityWithSubactivity {
 
   void run(Action action, int index);
   void showView(View next);
-  void startWork(const char* text, std::function<void(std::string& error)> work, View nextView);
+  /** Required: opens the Wi-Fi picker first when Wi-Fi is down. BestEffort: runs anyway (sign-out). */
+  enum class Network : uint8_t { Required, BestEffort };
+  void startWork(const char* text, std::function<void(std::string& error)> work, View nextView,
+                 Network network = Network::Required);
+  void requestWifi();
   void loadLibraries();
   void loadBooks();
   void loadDetail(const std::string& itemId);

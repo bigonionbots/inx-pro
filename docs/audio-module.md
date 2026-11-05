@@ -180,6 +180,21 @@ Books from an Audiobookshelf server can be streamed through the T5 or downloaded
 Either way they play through the module exactly like local books. Open it from
 **Audiobooks -> Books -> Audiobookshelf**.
 
+**Wi-Fi.** When the screen needs the server and Wi-Fi is down, it opens the Wi-Fi picker (as
+the other network screens do) and carries on once connected; cancelling shows "Audiobookshelf
+needs Wi-Fi" with a Connect button, and Back gives up. That connection is handed to `AbsWifi`,
+which turns Wi-Fi off once nothing uses it (leaving the screen while a stream plays keeps it).
+Signing out works offline. Background work with no screen to ask (streaming, progress sync of
+downloaded books) connects quietly with the saved networks instead.
+
+**HTTPS memory.** The prebuilt framework gives mbedTLS internal RAM only, and a handshake needs
+~40-50 KB (a 16 KB record buffer plus working memory). With the reader running, the largest
+internal block was 30 KB, and every HTTPS request failed with "SSL - Memory allocation failed".
+`Abs::begin()` therefore points mbedTLS's allocator at PSRAM first (internal as fallback), as
+the framework's `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC` would. A failed connection says why: name
+not found (with the DNS server asked), host unreachable, certificate not trusted, or the
+mbedTLS error and free internal RAM.
+
 **Sign-in.** The server URL, username and password are entered once. The client uses the v2.26+
 JWT scheme, checked against the v2.37.1 server source:
 - `POST /login` with `x-return-tokens: true` returns `user.accessToken` and `user.refreshToken`.

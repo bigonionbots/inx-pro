@@ -10,11 +10,17 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <SDCardManager.h>
+#include <WiFi.h>
 #include <esp_crt_bundle.h>
+#include <esp_heap_caps.h>
 #include <esp_http_client.h>
+#include <esp_tls_errors.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <mbedtls/error.h>
+#include <mbedtls/platform.h>
 
+#include <cstdio>
 #include <utility>
 
 #include "util/SdIoMutex.h"
@@ -66,6 +72,58 @@ esp_err_t collectBody(esp_http_client_event_t* event) {
 
 using Headers = std::vector<std::pair<std::string, std::string>>;
 
+/** "host:port" of a URL, for error messages. */
+std::string hostOf(const std::string& url) {
+  const size_t start = url.find("://");
+  const size_t from = start == std::string::npos ? 0 : start + 3;
+  const size_t end = url.find('/', from);
+  return url.substr(from, end == std::string::npos ? std::string::npos : end - from);
+}
+
+/**
+ * Says why a request could not reach the server. esp_http_client reports every such failure as
+ * ESP_ERR_HTTP_CONNECT; the cause is in esp-tls's last error: `tlsErr` (ESP_ERR_ESP_TLS_*, what
+ * failed), `mbedtlsCode` (mbedTLS's own error, negative) and `certFlags` (certificate checks).
+ * The commonest mistake: an address typed without a scheme gets https://, but Audiobookshelf
+ * itself serves plain HTTP (port 13378 by default).
+ */
+std::string connectError(const esp_err_t err, const esp_err_t tlsErr, const int mbedtlsCode, const int certFlags,
+                         const std::string& url) {
+  const std::string host = hostOf(url);
+  const bool https = url.rfind("https://", 0) == 0;
+  switch (tlsErr) {
+    case ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME: {
+      // Say which DNS server was asked: a name that only your own DNS knows (a local override)
+      // needs the network to hand that server out, which is what the T5 uses.
+      const std::string name = host.substr(0, host.find(':'));
+      const bool mdns = name.size() > 6 && name.compare(name.size() - 6, 6, ".local") == 0;
+      return "Server name not found: " + name + " (asked DNS " + WiFi.dnsIP(0).toString().c_str() + ", T5 at " +
+             WiFi.localIP().toString().c_str() + ")." +
+             (mdns ? " Names ending in .local do not work here; use its IP address." : "");
+    }
+    case ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST:
+    case ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT:
+      return "Could not reach " + host + ". Check the address and port, and that the T5 is on the same network.";
+    default:
+      break;
+  }
+  if (https && certFlags != 0) {
+    return "The server's certificate is not trusted (self-signed?). Use a certificate from a public CA, or "
+           "http://" +
+           host + " on your own network.";
+  }
+  // The details, so an unusual failure can be told apart (out of memory, a TLS version or cipher
+  // the server refuses, the server closing the connection).
+  char detail[160];
+  char mbedtlsText[80] = "";
+  if (mbedtlsCode != 0) mbedtls_strerror(mbedtlsCode, mbedtlsText, sizeof(mbedtlsText));
+  std::snprintf(detail, sizeof(detail), " (%s, esp-tls 0x%x, mbedTLS -0x%04x %s; %u KB internal RAM free)",
+                esp_err_to_name(err), static_cast<unsigned>(tlsErr), static_cast<unsigned>(-mbedtlsCode), mbedtlsText,
+                static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024));
+  if (https && mbedtlsCode != 0) return "Secure connection to " + host + " failed" + detail;
+  return "Could not connect to " + host + detail;
+}
+
 bool perform(const esp_http_client_method_t method, const std::string& url, const Headers& headers,
              const std::string& body, Response& response, std::string& error) {
   esp_http_client_config_t config = {};
@@ -91,9 +149,16 @@ bool perform(const esp_http_client_method_t method, const std::string& url, cons
   }
   const esp_err_t err = esp_http_client_perform(client);
   response.status = esp_http_client_get_status_code(client);
+  int mbedtlsCode = 0;
+  int certFlags = 0;
+  const esp_err_t tlsErr =
+      err != ESP_OK ? esp_http_client_get_and_clear_last_tls_error(client, &mbedtlsCode, &certFlags) : ESP_OK;
   esp_http_client_cleanup(client);
   if (err != ESP_OK) {
-    error = std::string("Network error: ") + esp_err_to_name(err);
+    const bool reached = tlsErr == ESP_OK && mbedtlsCode == 0 && certFlags == 0 && err != ESP_ERR_HTTP_CONNECT;
+    error = reached ? std::string("Network error: ") + esp_err_to_name(err)
+                    : connectError(err, tlsErr, mbedtlsCode, certFlags, url);
+    INX_SERIAL.printf("[ABS] %s: %s\n", url.c_str(), error.c_str());
     return false;
   }
   if (response.overflow) {
@@ -206,7 +271,24 @@ void saveSettings() {
 
 }  // namespace
 
+/**
+ * mbedTLS's allocations, PSRAM first. The prebuilt framework allocates them in internal RAM
+ * (CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC), and an HTTPS handshake needs a 16 KB record buffer plus
+ * its working memory, ~40-50 KB; with the reader running, the largest internal block was 30 KB,
+ * so every HTTPS request failed with "SSL - Memory allocation failed". This is what the
+ * framework's own CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC does, with internal RAM as the fallback.
+ */
+static void* tlsCalloc(const size_t count, const size_t size) {
+  void* p = heap_caps_calloc(count, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  return p ? p : heap_caps_calloc(count, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+static void tlsFree(void* p) { heap_caps_free(p); }
+
 void begin() {
+  // Before any TLS session exists: they must be freed by the allocator that made them.
+  static bool tlsInPsram = false;
+  if (!tlsInPsram) tlsInPsram = mbedtls_platform_set_calloc_free(tlsCalloc, tlsFree) == 0;
   if (!lock) lock = xSemaphoreCreateMutex();
   if (!refreshLock) refreshLock = xSemaphoreCreateMutex();
   loadSettings();

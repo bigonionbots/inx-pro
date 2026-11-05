@@ -97,18 +97,30 @@ void AbsActivity::showView(const View next) {
   updateRequired = true;
 }
 
-void AbsActivity::startWork(const char* text, std::function<void(std::string& error)> work, const View nextView) {
+void AbsActivity::startWork(const char* text, std::function<void(std::string& error)> work, const View nextView,
+                            const Network network) {
   if (busy) return;
+  if (network == Network::Required && !AbsWifi::connected()) {
+    // Wi-Fi is down (or dropped since): ask for it, then do this.
+    if (wifiHeld.exchange(false)) AbsWifi::release();
+    pending = {text, std::move(work), nextView};
+    hasPending = true;
+    requestWifi();
+    return;
+  }
+  wifiNeeded = false;
   busy = true;
   busyText = text;
   error.clear();
   updateRequired = true;
   auto* job = new WorkerJob();
-  job->body = [this, work, nextView] {
+  job->body = [this, work, nextView, network] {
     std::string failure;
     if (!wifiHeld) {
       if (AbsWifi::acquire(failure)) {
         wifiHeld = true;
+      } else if (network == Network::BestEffort) {
+        failure.clear();  // do the local part anyway
       }
     }
     if (failure.empty()) work(failure);
@@ -124,6 +136,28 @@ void AbsActivity::startWork(const char* text, std::function<void(std::string& er
     busy = false;
     error = "Out of memory";
   }
+}
+
+void AbsActivity::requestWifi() {
+  enterNewActivity(new WifiSelectionActivity(renderer, mappedInput, [this](const bool connected) {
+    exitActivity();
+    AbsWifi::prepare();  // the picker may have saved a network
+    if (connected) {
+      AbsWifi::adopt();
+      if (hasPending) {
+        PendingWork next = std::move(pending);
+        hasPending = false;
+        startWork(next.text.c_str(), std::move(next.work), next.nextView);
+      }
+    } else {
+      AbsWifi::offIfUnused();
+      wifiNeeded = true;
+      xSemaphoreTake(dataLock, portMAX_DELAY);
+      error = "Audiobookshelf needs Wi-Fi.";
+      xSemaphoreGive(dataLock);
+    }
+    updateRequired = true;
+  }));
 }
 
 void AbsActivity::loadLibraries() {
@@ -190,6 +224,19 @@ void AbsActivity::loop() {
 
   const auto close = [this] {
     if (busy) return;
+    if (wifiNeeded) {
+      // Give up on the work that wanted Wi-Fi and go back to the view it started from; on entry
+      // (signed in, nothing loaded yet) there is none, so leave.
+      wifiNeeded = false;
+      hasPending = false;
+      error.clear();
+      if (view == View::SignIn && Abs::signedIn()) {
+        onClose();
+        return;
+      }
+      updateRequired = true;
+      return;
+    }
     switch (view) {
       case View::Download:
         AbsDownloader::pause();
@@ -262,14 +309,19 @@ void AbsActivity::run(const Action action, const int index) {
       return;
     }
     case Action::WifiSettings:
-      enterNewActivity(new WifiSelectionActivity(renderer, mappedInput, [this](bool) {
+      enterNewActivity(new WifiSelectionActivity(renderer, mappedInput, [this](const bool connected) {
         exitActivity();
         AbsWifi::prepare();
+        if (connected) AbsWifi::adopt();
         updateRequired = true;
       }));
       return;
+    case Action::RetryWifi:
+      requestWifi();
+      return;
     case Action::SignOut:
-      startWork("Signing out...", [](std::string&) { Abs::signOut(); }, View::SignIn);
+      // Tells the server when it can; signing out here works offline too.
+      startWork("Signing out...", [](std::string&) { Abs::signOut(); }, View::SignIn, Network::BestEffort);
       return;
     case Action::OpenLibrary:
       if (index >= 0 && index < static_cast<int>(libraries.size())) {
@@ -369,11 +421,38 @@ void AbsActivity::render() {
     shownError = error;
     xSemaphoreGive(dataLock);
     if (!shownError.empty()) {
+      // Word-wrapped: connection errors explain what to change, which takes more than a line.
       constexpr int smallFont = MONTSERRAT_10_FONT_ID;
-      renderer.text.render(smallFont, MARGIN, y,
-                           renderer.text.truncate(smallFont, shownError.c_str(), width - 2 * MARGIN).c_str(), true,
-                           EpdFontFamily::BOLD);
-      y += renderer.text.getLineHeight(smallFont) + GAP;
+      const int maxWidth = width - 2 * MARGIN;
+      std::string line;
+      size_t at = 0;
+      const auto flush = [&] {
+        renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, line.c_str(), maxWidth).c_str(),
+                             true, EpdFontFamily::BOLD);
+        y += renderer.text.getLineHeight(smallFont);
+        line.clear();
+      };
+      while (at < shownError.size()) {
+        const size_t space = shownError.find(' ', at);
+        const std::string word = shownError.substr(at, space == std::string::npos ? std::string::npos : space - at);
+        at = space == std::string::npos ? shownError.size() : space + 1;
+        const std::string candidate = line.empty() ? word : line + " " + word;
+        if (!line.empty() && renderer.text.getWidth(smallFont, candidate.c_str()) > maxWidth) {
+          flush();
+          line = word;
+        } else {
+          line = candidate;
+        }
+      }
+      if (!line.empty()) flush();
+      y += GAP;
+    }
+    if (wifiNeeded) {
+      // The picker was cancelled: the work it was for is still waiting.
+      button(MARGIN, y, width - 2 * MARGIN, BUTTON_HEIGHT, "Connect to Wi-Fi", Action::RetryWifi, 0, true);
+      renderer.displayBuffer();
+      lastRenderMs = millis();
+      return;
     }
     switch (view) {
       case View::SignIn:
