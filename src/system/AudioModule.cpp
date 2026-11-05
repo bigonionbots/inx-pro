@@ -111,7 +111,7 @@ void boostOff(const char* reason) {
 }
 
 // Multiplicative hash: no short period, so a few bytes pin down their position in the stream.
-// audio-module's diagnostic firmware uses the same pattern.
+// The module repository's diagnostic firmware uses the same pattern.
 uint8_t linkPatternByte(const uint32_t index) { return static_cast<uint8_t>((index * 2654435761u) >> 24); }
 
 }  // namespace

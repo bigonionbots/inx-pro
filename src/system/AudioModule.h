@@ -41,8 +41,8 @@ constexpr uint32_t LINK_OFF_POWER_OFF_MS = 5 * 60 * 1000;
 enum class PowerResult : uint8_t { Ok, ExternalVbus, NoCharger, I2cError, BoostFault };
 
 /**
- * One-direction link test against the module's link-diagnostic firmware (audio-module env
- * atom_lite). The ATOM Lite's FTDI-emulating bridge is solid host -> module but drops module ->
+ * One-direction link test against the module's link-diagnostic firmware (the module repository's
+ * atom_linkdiag env). The ATOM Lite's FTDI-emulating bridge is solid host -> module but drops module ->
  * host data unless it is trickled, so each direction is measured separately.
  */
 struct LinkTestResult {

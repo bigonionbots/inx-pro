@@ -2,9 +2,14 @@
 
 /**
  * @file AudioLinkProtocol.h
- * @brief Wire protocol between the T5 (inx-pro, `t5s3_audio`) and the audio module (audio-module/).
+ * @brief Wire protocol between a host board and the ATOM Lite audio module.
  *
- * Shared verbatim by both firmwares, so keep it dependency-free C++.
+ * This repository is its home. Hosts include a verbatim copy, so keep it dependency-free C++ and
+ * keep changes backwards compatible: new fields go at the end of a payload, and receivers accept
+ * payloads at least as long as the struct they know.
+ *
+ * The same frames run over either transport the module offers (USB through the ATOM's bridge, or
+ * a plain UART on its Grove port), 8N1 at BAUD unless both ends are built otherwise.
  *
  * Frame (little endian):
  *
@@ -13,7 +18,7 @@
  * crc16 is CRC-16/CCITT-FALSE over type, seq, length and payload. A receiver hunts for the
  * magic, drops frames with a bad CRC or an oversized length, and resynchronises on the next magic.
  *
- * T5 -> module ("host" frames) are reliable, go-back-N: every frame carries the next sequence
+ * Host -> module ("host" frames) are reliable, go-back-N: every frame carries the next sequence
  * number; the module accepts only the expected one and answers with ACK(nextSeq, rxFree). An
  * out-of-sequence frame (one before it was lost or damaged) gets an ACK flagged OUT_OF_SEQUENCE,
  * on which the host resends its window from nextSeq at once; RESEND_TIMEOUT_MS without progress
@@ -22,9 +27,9 @@
  * link). Audio flow control rides on the same ACK: the host keeps the audio bytes in
  * unacknowledged frames at or below the last rxFree.
  *
- * Module -> T5 frames are small and idempotent (ACK, periodic STATUS, scan results), so they
+ * Module -> host frames are small and idempotent (ACK, periodic STATUS, scan results), so they
  * carry seq 0 and are never resent. Keep them short: some bridges (the ATOM Lite's FTDI
- * emulation, see docs/audio-module.md) have no flow control in that direction.
+ * emulation, see the README) have no flow control in that direction.
  *
  * Positions: STREAM_START names a stream id and the book position the data starts at. The
  * module counts playedMs from that point in source samples actually sent to the output, so
@@ -86,7 +91,7 @@ enum class Type : uint8_t {
   Ack = 0x81,       ///< AckPayload
   Status = 0x82,    ///< StatusPayload
   BtDevice = 0x83,  ///< BtDevicePayload, one per discovered device
-  Log = 0x84,       ///< UTF-8 text, for the T5's module log
+  Log = 0x84,       ///< UTF-8 text, for the host's log
 };
 
 enum class Codec : uint8_t {
@@ -99,6 +104,13 @@ enum class Output : uint8_t {
   Bluetooth = 1,
   I2s = 2,
   Null = 3,  ///< Consumes PCM in real time and discards it (link and decoder testing)
+};
+
+/** The link the module heard the host on (HELLO, from module firmware 0.2). */
+enum class Transport : uint8_t {
+  Unknown = 0,  ///< Not yet known (an older module sends a shorter HELLO: treat a missing field as this)
+  Usb = 1,      ///< Through the ATOM's USB-to-UART bridge
+  Uart = 2,     ///< The Grove port UART
 };
 
 enum class PlayState : uint8_t {
@@ -131,6 +143,7 @@ struct HelloPayload {
    * boot HELLO as the answer, so it must not assume its own PING got through.
    */
   uint8_t nextSeq;
+  uint8_t transport;  ///< Transport, from module firmware 0.2 (absent before: Unknown)
 };
 
 constexpr uint8_t ACK_OUT_OF_SEQUENCE = 0x01;  ///< A frame arrived out of sequence: resend from nextSeq

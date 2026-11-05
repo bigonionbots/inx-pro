@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstring>
 
 #include "AudioModule.h"
@@ -142,8 +143,15 @@ void handleAck(const uint8_t* payload, const uint16_t length) {
 
 void handleHello(const uint8_t* payload, const uint16_t length) {
   Guard guard;
-  if (length >= sizeof(helloPayload)) std::memcpy(&helloPayload, payload, sizeof(helloPayload));
-  if (pingOutstanding && length >= sizeof(helloPayload)) {
+  // Fields are only ever appended (module firmware 0.2 added `transport`): accept a HELLO as long
+  // as the oldest one, and leave what an older module does not send at zero (Transport::Unknown).
+  constexpr size_t OLDEST_HELLO = offsetof(audiolink::HelloPayload, transport);
+  const bool complete = length >= OLDEST_HELLO;
+  if (complete) {
+    helloPayload = audiolink::HelloPayload{};
+    std::memcpy(&helloPayload, payload, std::min<size_t>(length, sizeof(helloPayload)));
+  }
+  if (pingOutstanding && complete) {
     pingOutstanding = false;
     // Continue from where the module is, which is not necessarily after our PING (see HelloPayload).
     nextSeq = helloPayload.nextSeq;

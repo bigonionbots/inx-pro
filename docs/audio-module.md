@@ -8,6 +8,13 @@ or wired.
 
 Build the `t5s3_audio` env. The plain `t5s3` env does not contain any of this.
 
+**The module firmware is not in this repository.** It lives in
+[bigonionbots/atom-lite-audio-module](https://github.com/bigonionbots/atom-lite-audio-module),
+which documents its build envs, PC test tools, DAC wiring, memory budget and decoders, and is the
+home of the link protocol: `shared/audio_link/` here holds verbatim copies of its `protocol/`
+(see the README there for how to update them). Module firmware 0.2 also takes the link on its
+Grove port as a plain UART, for other hosts; the T5 uses the USB-C cable, which also powers it.
+
 ## Hardware findings
 
 From `hardware/T5 E-paper S3 Pro V1.0 24-12-24.pdf` in Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO. The
@@ -37,8 +44,8 @@ Pro Lite uses the same board without LoRa and GPS.
 
 The test unit's USB serial is **not an FTDI chip**. It enumerates as `0403:6001` with manufacturer
 "Hades2001", product "M5stack" and bcdDevice 5.00 (it claims to be an FT2232C), so it is an
-MCU-based FTDI emulation. Measured from a Linux PC (`audio-module/tools/`, kernel `ftdi_sio`) and from the T5 (Audio
-Module -> Link test):
+MCU-based FTDI emulation. Measured from a Linux PC (the module repository's `tools/`, kernel `ftdi_sio`) and from the T5
+(Audio Module -> Link test):
 
 | Test | Result |
 | --- | --- |
@@ -85,8 +92,9 @@ anyway: hold BOOT, tap RST, release BOOT.
 
 ## Bench test (stage 2)
 
-1. Flash the ATOM from `audio-module/`: `cd audio-module && pio run -t upload`. Its LED turns
-   blue. Optional: before unplugging it, note the bridge with `lsusb` (VID:PID).
+1. Flash the ATOM from the module repository (`pio run -t upload` there; its `atom_linkdiag` env
+   for the Link test below). Its LED turns blue. Optional: before unplugging it, note the bridge
+   with `lsusb` (VID:PID).
 2. Flash the T5: `pio run -e t5s3_audio -t upload`, then unplug the PC.
 3. Plug the ATOM into the T5 with a C-to-C cable, then open Device Management -> Audio Module.
 4. Tap **Module power**. Expected: VBUS shows `OTG boost` at about 5.1 V and the ATOM's LED
@@ -96,8 +104,7 @@ anyway: hold BOOT, tap RST, release BOOT.
    With this ATOM Lite's bridge, expect T5 -> MODULE clean, MODULE -> T5 paced exact, and
    unpaced damaged (see the bridge section).
 
-From a PC instead: `python3 audio-module/tools/link_diag.py /dev/ttyUSB0` with the default
-firmware, or `echo_test.py` with `pio run -e atom_echo -t upload`.
+From a PC instead: the module repository's `tools/link_diag.py` and `tools/echo_test.py`.
 
 Results so far (2026-10-28):
 - bridge: emulated FTDI `0403:6001`, see above
@@ -137,12 +144,12 @@ without chapters (a folder of MP3s) step by file as before.
 
 | Where | What |
 | --- | --- |
-| `shared/audio_link/AudioLinkProtocol.h` | Wire protocol, shared verbatim by both firmwares: framing with CRC-16, reliable go-back-N host frames, credit flow control on the ACK, STATUS/BT_DEVICE/LOG from the module. |
+| `shared/audio_link/AudioLinkProtocol.h` | Wire protocol, a verbatim copy from the module repository: framing with CRC-16, reliable go-back-N host frames, credit flow control on the ACK, STATUS/BT_DEVICE/LOG from the module. |
 | `src/audio/` | `Mp3Source` (ID3 skip, Xing/VBRI duration and TOC seek) and `Mp4Source` (first AAC track to ADTS; stsz/stco read from the card on demand, so 20 h books are fine). The ADTS output is byte-identical to `ffmpeg -c:a copy -f adts`. |
 | `src/system/AudioLink.*` | T5 end of the protocol: link task, resend window in PSRAM, status cache, Bluetooth scan results. |
 | `src/system/AudioPlayer.*` | Books, tracks, progress. SD reads happen only on the main loop, into a 512 KB PSRAM queue, about a minute of audio. A sender task drains it to the link. This avoids racing the reader's own SD access, since SdFat is not thread-safe and most reader I/O does not take SdIoMutex. |
 | `src/activity/settings/AudioPlayerActivity.*` | Now playing / Books / Output screens. |
-| `audio-module/src/` | `Link` (frames, ACKs, STATUS), `Player` (16 KB input buffer, libhelix MP3/AAC-LC, resampling to 44.1 kHz stereo, volume), `Outputs` (ESP32-A2DP source, I2S, null sink). The output and volume persist in NVS. |
+| Module firmware | In its own repository (see the top of this page): it decodes MP3/AAC-LC (libhelix) and µ-law, resamples to 44.1 kHz stereo, and plays to Bluetooth A2DP, a PCM5102A DAC or a null sink; output and volume persist in its NVS. |
 
 **Live streams (game sound, protocol 3).** Besides MP3 and AAC, a stream may be `Codec::MuLaw`:
 G.711 µ-law bytes (`shared/audio_link/MuLaw.h`), with the sample rate and channel count in
@@ -153,37 +160,12 @@ waits for 60 ms again. STATUS `decodeErrors` counts those drops for a live strea
 `docs/games.md`); when the output runs at exactly twice the stream rate, as Bluetooth and I2S do
 at 44.1 kHz, the module upsamples with `Resample2x.h`'s low-pass instead of its linear resampler. Both firmwares must be updated together for it.
 
-**Module firmware envs** (`audio-module/platformio.ini`):
-- `atom_lite`, the default, is the player.
-- `atom_linkdiag` is the raw stage-2 link test used by the T5's Audio Module -> Link test.
-- `atom_echo`, `atom_diag` and `atom_beacon` are the PC bench tools.
+**Module side.** Its build envs, PC stand-in (`tools/play.py`), DAC wiring, memory budget and
+measurements are in the module repository's README. One limit shows on the T5: with no PSRAM the
+module plays HE-AAC books as their AAC-LC core, which sounds duller.
 
-**PC stand-in for the T5:** `audio-module/tools/play.py PORT FILE --output null|bt|i2s`, plus
-`--scan N` / `--connect ADDR`. It uses ffmpeg to turn M4B into ADTS.
-
-**PCM5102A wiring (ATOM Lite header):**
-- BCK -> G22, LRCK -> G19, DIN -> G23. Override with `AUDIO_MODULE_I2S_*`.
-- SCK -> GND (internal PLL), XSMT -> 3V3, FMT/FLT/DEMP -> GND.
-
-**Memory on the ATOM Lite** (ESP32-PICO-D4, no PSRAM; measured 2026-10-28):
-
-| Stage | Free heap |
-| --- | --- |
-| Boot | 217 KB (largest block 110 KB) |
-| After the module's buffers and tasks | 157 KB |
-| Bluetooth Classic started | ~75 KB |
-| Plus the MP3 or AAC decoder | ~53 KB |
-
-HE-AAC (SBR) would need another 51 KB contiguous block, so it is compiled out (`HELIX_NO_AAC_SBR`, vendored `audio-module/lib/libhelix`). HE-AAC books play their AAC-LC core, which sounds duller. Full HE-AAC needs a module with PSRAM.
-
-**Measured from a PC** (`tools/play.py`, silent output): MP3 22 kHz mono and AAC-LC 44.1 kHz
-mono M4B both play in real time, with 0 resends and 0 decode errors. 128 kbit/s stereo starves
-from a Linux PC, because the Linux FTDI path tops out around 10 KB/s. The T5's host measured
-39 KB/s on the same bridge, so 128 kbit/s still has to be checked on the T5.
-
-**Licences:** ESP32-A2DP is Apache-2.0. codec-helix (libhelix, vendored) is GPL-3.0, with the Helix
-decoders under the RealNetworks RPSL. The ATOM firmware binary is therefore GPL-3.0. The T5
-firmware does not link either library.
+**Licences:** the module firmware's binary is GPL-3.0 (it links libhelix); this firmware links
+none of its libraries, and the protocol headers it copies depend on none of them.
 
 ## Audiobookshelf
 
