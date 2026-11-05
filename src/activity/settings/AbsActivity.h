@@ -32,11 +32,13 @@
  */
 class AbsActivity final : public ActivityWithSubactivity {
  public:
+  /** With resumeItemId: opens that book and plays it (downloaded copy if any, else streamed). */
   AbsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::function<void()> onClose,
-              std::function<void()> onPlay)
+              std::function<void()> onPlay, std::string resumeItemId = "")
       : ActivityWithSubactivity("Audiobookshelf", renderer, mappedInput),
         onClose(std::move(onClose)),
-        onPlay(std::move(onPlay)) {}
+        onPlay(std::move(onPlay)),
+        resumeId(std::move(resumeItemId)) {}
 
   void onEnter() override;
   void onExit() override;
@@ -87,6 +89,8 @@ class AbsActivity final : public ActivityWithSubactivity {
 
   const std::function<void()> onClose;
   const std::function<void()> onPlay;
+  std::string resumeId;   ///< a book to open and play as soon as the screen can (Audiobooks page)
+  bool autoPlay = false;  ///< play the book whose details arrive next
 
   View view = View::SignIn;
   std::vector<Target> targets;
@@ -157,6 +161,9 @@ class AbsActivity final : public ActivityWithSubactivity {
   void openList(ListKind kind, const std::string& key);
   void rebuildList();
   void openBook(const std::string& itemId, View from);
+  void resumeIfAsked();
+  /** The open book's page has its details: plays it when autoPlay asked for that. */
+  void playIfAsked();
   void loadDetail(const std::string& itemId);
   void refreshLocalState();
   void editField(const char* title, std::string& field, bool secret);

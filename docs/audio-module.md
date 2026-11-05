@@ -114,7 +114,10 @@ a PCM5102A, or a silent test sink.
 
 **Using it.** Copy books to `/Audiobooks` on the SD card. Each book is one `.m4b` / `.m4a` / `.mp4` /
 `.mp3` file, or a folder of them, played in natural name order ("Part 2" before "Part 10").
-**Home -> Shortcuts -> Audiobooks** lists them. Pick one and it resumes where you left off;
+**Home -> Shortcuts -> Audiobooks** lists them under **On this device** (with covers), below
+**Recently streamed**: the last Audiobookshelf books streamed (`/.system/audio_recent.json`, kept
+up to date as they play), with their progress. Tapping one carries on: it opens on Audiobookshelf,
+which asks for Wi-Fi if needed, and plays the downloaded copy if there is one, else streams it. Pick one and it resumes where you left off;
 progress is in `/.system/audio_progress.txt`.
 - The **Output** view picks Bluetooth headphones (Scan, tap the headset in pairing mode;
   it is remembered and reconnects), the wired DAC, or the silent test sink.
@@ -241,6 +244,10 @@ JWT scheme, checked against the v2.37.1 server source:
 - On a 401, `POST /auth/refresh` with `x-refresh-token` returns a new access token and a rotated
   refresh token, and the request is retried once.
 - Older servers fall back to the legacy `user.token`.
+- ESP-IDF 5's `esp_http_client_perform()` returns `ESP_ERR_NOT_SUPPORTED`, not `ESP_OK`, for a
+  401 whose `WWW-Authenticate` is not Basic/Digest, which is every 401 from Audiobookshelf. The
+  client treats that as the 401 reply it is; otherwise an expired access token (about an hour)
+  showed as "Network error: ESP_ERR_NOT_SUPPORTED" and was never refreshed.
 
 The password is never stored. The tokens are saved in `/.system/audiobookshelf.json`. A refresh
 token unused for 30 days (the server default) means signing in again.

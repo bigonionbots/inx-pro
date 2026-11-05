@@ -71,10 +71,23 @@ struct View {
   std::string coverPath;
 };
 
+/** An Audiobookshelf book streamed recently (/.system/audio_recent.json), for the Audiobooks page. */
+struct RecentStream {
+  std::string itemId;
+  std::string title;
+  std::string author;
+  uint32_t positionMs = 0;  ///< in the whole book, when last saved
+  uint32_t durationMs = 0;
+};
+
 /** Starts the sender task. Call once at boot. */
 void begin();
 
 std::vector<Book> listBooks();
+/** Recently streamed books, most recent first (at most a few). Main loop (SD). */
+std::vector<RecentStream> recentStreams();
+/** A book's cover image if one is already on the card (no audio file is opened), else "". */
+std::string coverFor(const Book& book);
 /** Streams an Audiobookshelf item over Wi-Fi from its saved (and synced) position. */
 bool openRemote(const Abs::ItemDetail& item);
 /** Opens a book at its saved position and starts playing. Turns the module link and power on. */

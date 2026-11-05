@@ -23,6 +23,7 @@
 #include "util/SdIoMutex.h"
 
 extern void onGoToAudiobookshelf();
+extern void onResumeAudiobookshelf(const std::string& itemId);
 
 namespace {
 
@@ -32,6 +33,10 @@ constexpr int BUTTON_HEIGHT = 76;
 constexpr int GAP = 12;
 constexpr int VOLUME_STEP = 10;
 constexpr int32_t SKIP_MS = 30000;
+/** The Audiobooks page: rows with a cover, and how many recently streamed books it shows. */
+constexpr int COVER_ROW_HEIGHT = 84;
+constexpr int COVER_INSET = 6;
+constexpr size_t RECENT_SHOWN = 3;
 constexpr unsigned long POSITION_REDRAW_MS = 10000;
 constexpr unsigned long MIN_REDRAW_MS = 1000;
 
@@ -118,6 +123,11 @@ void AudioPlayerActivity::showView(const View next) {
   view = next;
   if (view == View::Books) {
     books = AudioPlayer::listBooks();
+    recent = AudioPlayer::recentStreams();
+    if (recent.size() > RECENT_SHOWN) recent.resize(RECENT_SHOWN);
+    // Covers once per visit: finding a folder's image reads its directory.
+    bookCovers.clear();
+    for (const AudioPlayer::Book& b : books) bookCovers.push_back(AudioPlayer::coverFor(b));
     booksFirst = 0;
   }
   if (view == View::Output) AudioPlayer::wakeModule();
@@ -259,9 +269,15 @@ void AudioPlayerActivity::run(const Action action, const int index) {
         return;
       }
       break;
+    case Action::ResumeStreamed:
+      if (index >= 0 && index < static_cast<int>(recent.size())) {
+        onResumeAudiobookshelf(recent[index].itemId);  // fetches it and plays (or plays a download)
+        return;
+      }
+      break;
     case Action::BooksPageUp:
     case Action::BooksPageDown: {
-      const int rows = std::max(1, (renderer.getScreenHeight() - 260 - BUTTON_HEIGHT - 2 * GAP) / ROW_HEIGHT);
+      const int rows = bookRows(contentTop);
       booksFirst += action == Action::BooksPageDown ? rows : -rows;
       booksFirst = std::max(0, std::min(booksFirst, std::max(0, static_cast<int>(books.size()) - 1)));
       break;
@@ -530,15 +546,77 @@ void AudioPlayerActivity::renderChapters(int y) {
   }
 }
 
+void AudioPlayerActivity::drawCover(const std::string& path, const int x, const int y, const int size) {
+  bool onCard = false;
+  if (!path.empty()) {
+    SdIoMutex::Lock lock;
+    onCard = SdMan.exists(path.c_str());
+  }
+  if (onCard) {
+    ImageRender::Options options;
+    options.cropToFill = true;
+    if (ImageRender::create(renderer, path).render(x, y, size, size, options)) return;
+  }
+  renderer.rectangle.dotted(x, y, size, size, true);
+}
+
+/** Device books shown per page: what fits under the Audiobookshelf button and recent streams. */
+int AudioPlayerActivity::bookRows(const int top) const {
+  const int labelH = 40;
+  int used = BUTTON_HEIGHT + 2 * GAP;
+  if (!recent.empty()) used += labelH + static_cast<int>(recent.size()) * COVER_ROW_HEIGHT + GAP;
+  used += labelH;
+  const int pagerTop = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
+  return std::max(1, (pagerTop - top - used) / COVER_ROW_HEIGHT);
+}
+
 void AudioPlayerActivity::renderBooks(int y) {
   const int width = renderer.getScreenWidth();
   const int inner = width - 2 * MARGIN;
   const int font = systemFontId();
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
+  const int top = y;
 
   button(MARGIN, y, inner, BUTTON_HEIGHT, "Audiobookshelf", Action::ShowAudiobookshelf);
   y += BUTTON_HEIGHT + 2 * GAP;
 
+  const auto label = [&](const char* text) {
+    renderer.text.render(smallFont, MARGIN, y + 8, text, true, EpdFontFamily::BOLD);
+    y += 40;
+  };
+  const int cover = COVER_ROW_HEIGHT - 2 * COVER_INSET;
+  const int textX = MARGIN + cover + GAP;
+  const int textW = inner - cover - GAP;
+  const auto bookRow = [&](const std::string& coverPath, const std::string& title, const std::string& info,
+                           const bool current, const Action action, const int index) {
+    drawCover(coverPath, MARGIN, y + COVER_INSET, cover);
+    renderer.text.render(font, textX, y + 10,
+                         renderer.text.truncate(font, ((current ? "> " : "") + title).c_str(), textW).c_str(), true,
+                         EpdFontFamily::BOLD);
+    if (!info.empty()) {
+      renderer.text.render(smallFont, textX, y + 16 + renderer.text.getLineHeight(font),
+                           renderer.text.truncate(smallFont, info.c_str(), textW).c_str());
+    }
+    renderer.line.render(0, y + COVER_ROW_HEIGHT - 1, width, y + COVER_ROW_HEIGHT - 1, true, LineRender::Style::Dotted);
+    targets.push_back({0, y, width, COVER_ROW_HEIGHT, action, index});
+    y += COVER_ROW_HEIGHT;
+  };
+  const AudioPlayer::View v = AudioPlayer::view();
+
+  if (!recent.empty()) {
+    label("RECENTLY STREAMED");
+    for (size_t i = 0; i < recent.size(); ++i) {
+      const AudioPlayer::RecentStream& r = recent[i];
+      std::string info;
+      if (r.durationMs) info = std::to_string(static_cast<int>(100ull * r.positionMs / r.durationMs)) + "%";
+      if (!r.author.empty()) info += (info.empty() ? "" : "  -  ") + r.author;
+      bookRow(AbsCovers::path(r.itemId), r.title, info, v.open && v.remote && v.title == r.title,
+              Action::ResumeStreamed, static_cast<int>(i));
+    }
+    y += GAP;
+  }
+
+  label("ON THIS DEVICE");
   if (books.empty()) {
     renderer.text.render(font, MARGIN, y, "No audiobooks on the device.");
     y += renderer.text.getLineHeight(font) + GAP;
@@ -547,22 +625,16 @@ void AudioPlayerActivity::renderBooks(int y) {
     renderer.text.render(smallFont, MARGIN, y, "/Audiobooks: one .m4b/.m4a/.mp3 file or folder per book.");
     return;
   }
-
-  const int pagerTop = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
-  const int rows = std::max(1, (pagerTop - y) / ROW_HEIGHT);
-  const AudioPlayer::View v = AudioPlayer::view();
+  const int rows = bookRows(top);
   for (int i = 0; i < rows && booksFirst + i < static_cast<int>(books.size()); ++i) {
-    const AudioPlayer::Book& book = books[booksFirst + i];
-    const int rowY = y + i * ROW_HEIGHT;
-    const bool current = v.open && book.title == v.title;
-    std::string label = (current ? "> " : "") + book.title;
-    label = renderer.text.truncate(font, label.c_str(), inner);
-    renderer.text.render(font, MARGIN, rowY + (ROW_HEIGHT - renderer.text.getLineHeight(font)) / 2, label.c_str(), true,
-                         current ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-    renderer.line.render(0, rowY + ROW_HEIGHT - 1, width, rowY + ROW_HEIGHT - 1, true, LineRender::Style::Dotted);
-    targets.push_back({0, rowY, width, ROW_HEIGHT, Action::OpenBook, booksFirst + i});
+    const int n = booksFirst + i;
+    const AudioPlayer::Book& book = books[n];
+    const bool current = v.open && !v.remote && book.title == v.title;
+    bookRow(n < static_cast<int>(bookCovers.size()) ? bookCovers[n] : "", book.title,
+            book.absItemId.empty() ? "" : "From Audiobookshelf", current, Action::OpenBook, n);
   }
 
+  const int pagerTop = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
   const int pagerW = (inner - GAP) / 2;
   if (booksFirst > 0) button(MARGIN, pagerTop, pagerW, BUTTON_HEIGHT, "Previous", Action::BooksPageUp);
   if (booksFirst + rows < static_cast<int>(books.size())) {

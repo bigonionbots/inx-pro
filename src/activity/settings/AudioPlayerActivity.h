@@ -17,7 +17,8 @@
 /**
  * Audiobook player screen (Home -> Shortcuts -> Audiobooks). Three views:
  * - Now playing: transport, volume and output; playback keeps going after the screen closes.
- * - Books: the books under /Audiobooks, plus the way into Audiobookshelf (AbsActivity).
+ * - Books (the Audiobooks page): recently streamed Audiobookshelf books (tap to carry on), the
+ *   books on the device under /Audiobooks, and the way into Audiobookshelf (AbsActivity).
  * - Chapters: the open book's chapters, to jump to one (books with chapters only).
  * - Output: Bluetooth headphones (scan, connect, forget), the wired DAC, or the silent test sink.
  *
@@ -57,6 +58,7 @@ class AudioPlayerActivity final : public Activity {
     ShowOutput,
     ShowAudiobookshelf,
     OpenBook,
+    ResumeStreamed,  ///< index = position in `recent`
     BooksPageUp,
     BooksPageDown,
     UseBluetooth,
@@ -76,6 +78,8 @@ class AudioPlayerActivity final : public Activity {
   const std::function<void()> onClose;
   View view = View::NowPlaying;
   std::vector<AudioPlayer::Book> books;
+  std::vector<AudioPlayer::RecentStream> recent;  ///< while the Books view is open
+  std::vector<std::string> bookCovers;            ///< per book, "" when none (found once per visit)
   int booksFirst = 0;
   std::vector<AudioChapter> chapterList;  ///< while the Chapters view is open
   int chaptersFirst = 0;
@@ -94,6 +98,8 @@ class AudioPlayerActivity final : public Activity {
   void renderBooks(int top);
   void renderOutput(int top);
   void renderChapters(int top);
+  void drawCover(const std::string& path, int x, int y, int size);
+  int bookRows(int top) const;
   int listRows() const;
   void button(int x, int y, int w, int h, const char* label, Action action, int index = 0, bool filled = false);
   std::string stateKey() const;

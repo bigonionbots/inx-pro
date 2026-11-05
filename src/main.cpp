@@ -250,6 +250,11 @@ void onGoToGames() {
 void onGoToAudiobookshelf() {
   switchTo<AbsActivity>(render, input, [] { onGoToAudiobooks(); }, [] { onGoToAudiobooks(); });
 }
+
+/** Opens Audiobookshelf on a recently streamed book and plays it (the Audiobooks page). */
+void onResumeAudiobookshelf(const std::string& itemId) {
+  switchTo<AbsActivity>(render, input, [] { onGoToAudiobooks(); }, [] { onGoToAudiobooks(); }, itemId);
+}
 #endif
 
 void openHomeSubPage(const HomeSubPage::Section section) {

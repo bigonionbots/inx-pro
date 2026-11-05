@@ -92,7 +92,11 @@ void AbsActivity::onEnter() {
   server = Abs::serverUrl();
   user = Abs::username();
   if (Abs::signedIn()) {
-    if (!showCached()) loadLibraries();  // first visit: nothing cached, so wait for the server
+    if (showCached()) {
+      resumeIfAsked();
+    } else {
+      loadLibraries();  // first visit: nothing cached, so wait for the server (resumes after)
+    }
   } else {
     showView(View::SignIn);
   }
@@ -237,6 +241,21 @@ void AbsActivity::rebuildList() {
   if (listFirst >= static_cast<int>(listBooks.size())) listFirst = 0;
 }
 
+void AbsActivity::resumeIfAsked() {
+  if (resumeId.empty() || busy) return;
+  const std::string id = resumeId;
+  resumeId.clear();
+  autoPlay = true;
+  openBook(id, View::Home);
+}
+
+void AbsActivity::playIfAsked() {
+  if (!autoPlay) return;
+  autoPlay = false;
+  refreshLocalState();
+  run(localComplete ? Action::PlayLocal : Action::Stream, 0);
+}
+
 void AbsActivity::openBook(const std::string& itemId, const View from) {
   detailFrom = from;
   if (!AbsWifi::connected()) {
@@ -254,6 +273,7 @@ void AbsActivity::openBook(const std::string& itemId, const View from) {
       error.clear();
       refreshLocalState();
       showView(View::Detail);
+      playIfAsked();
       return;
     }
   }
@@ -403,7 +423,10 @@ void AbsActivity::loop() {
 
   if (resultReady.exchange(false)) {
     // The worker finished: views that need SD state get it here, on the main loop.
-    if (view == View::Detail) refreshLocalState();
+    if (view == View::Detail) {
+      refreshLocalState();
+      if (error.empty()) playIfAsked();
+    }
     if (view == View::More && error.empty() && !libraries.empty()) {
       AbsLibrary::saveLibraries(libraries);
       if (libraries.size() == 1) {
@@ -417,6 +440,7 @@ void AbsActivity::loop() {
       AbsLibrary::saveShelves(library.id, shelves);
       if (index.empty()) AbsLibrary::loadIndex(library.id, index);
       startRefresh(false);
+      resumeIfAsked();
     }
     updateRequired = true;
   }

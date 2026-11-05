@@ -8,6 +8,7 @@
 #if INX_HAS_AUDIO_MODULE
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <SDCardManager.h>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
@@ -438,6 +439,7 @@ std::vector<AudioChapter> bookChapters;  // in the whole book; empty when the bo
 std::string coverPath;                   // see View::coverPath
 uint32_t pausedAtMs = 0;                 // when the current pause began
 bool wifiParked = false;                 // streamed book paused long enough to stop the stream
+std::string bookAuthor;                  // streamed books: for the recent list
 int track = 0;
 std::unique_ptr<AudioSource> source;  // SD tracks only; streamed tracks live on the feeder task
 uint32_t trackDurationMs = 0;
@@ -495,6 +497,63 @@ bool naturalLess(const std::string& a, const std::string& b) {
 }
 
 constexpr const char* LOCAL_COVERS = "/.system/cache/audio-covers";
+constexpr const char* RECENT_FILE = "/.system/audio_recent.json";
+constexpr size_t RECENT_MAX = 8;
+
+std::vector<RecentStream> loadRecent() {
+  std::vector<RecentStream> out;
+  SdIoMutex::Lock lock;
+  FsFile file = SdMan.open(RECENT_FILE, O_RDONLY);
+  if (!file) return out;
+  std::string text;
+  char chunk[256];
+  for (int n; (n = file.read(chunk, sizeof(chunk))) > 0;) text.append(chunk, static_cast<size_t>(n));
+  file.close();
+  JsonDocument doc;
+  if (deserializeJson(doc, text) != DeserializationError::Ok) return out;
+  for (JsonObject r : doc.as<JsonArray>()) {
+    RecentStream entry;
+    entry.itemId = r["id"] | "";
+    entry.title = r["title"] | "";
+    entry.author = r["author"] | "";
+    entry.positionMs = r["positionMs"] | 0u;
+    entry.durationMs = r["durationMs"] | 0u;
+    if (!entry.itemId.empty()) out.push_back(entry);
+  }
+  return out;
+}
+
+void saveRecent(const std::vector<RecentStream>& recent) {
+  JsonDocument doc;
+  for (const RecentStream& r : recent) {
+    JsonObject o = doc.add<JsonObject>();
+    o["id"] = r.itemId;
+    o["title"] = r.title;
+    o["author"] = r.author;
+    o["positionMs"] = r.positionMs;
+    o["durationMs"] = r.durationMs;
+  }
+  std::string text;
+  serializeJson(doc, text);
+  SdIoMutex::Lock lock;
+  SdMan.mkdir("/.system");
+  FsFile file = SdMan.open(RECENT_FILE, O_WRONLY | O_CREAT | O_TRUNC);
+  if (!file) return;
+  file.write(text.data(), text.size());
+  file.close();
+}
+
+/** The streamed book to the front of the recent list, with its position now. */
+void noteRecent(const std::string& itemId, const std::string& title, const std::string& author,
+                const uint32_t positionMs, const uint32_t durationMs) {
+  std::vector<RecentStream> recent = loadRecent();
+  recent.erase(
+      std::remove_if(recent.begin(), recent.end(), [&itemId](const RecentStream& r) { return r.itemId == itemId; }),
+      recent.end());
+  recent.insert(recent.begin(), RecentStream{itemId, title, author, positionMs, durationMs});
+  if (recent.size() > RECENT_MAX) recent.resize(RECENT_MAX);
+  saveRecent(recent);
+}
 
 bool isImageName(const std::string& name, const bool preferredOnly) {
   std::string lower = name;
@@ -535,12 +594,19 @@ std::string folderCover(const std::string& folder) {
  * Copies cover art embedded in an audio file into the cache once (named by a hash of the file's
  * path), so the screen draws a small file rather than seeking into a large one. Holds SdIoMutex.
  */
-std::string cacheEmbeddedCover(const std::string& audioPath, const uint64_t offset, const uint32_t length,
-                               const bool png) {
+/** Where an audio file's embedded cover is cached (named by a hash of the file's path). */
+std::string embeddedCoverPath(const std::string& audioPath, const bool png) {
   uint32_t hash = 2166136261u;
   for (const unsigned char c : audioPath) hash = (hash ^ c) * 16777619u;
   char name[48];
   snprintf(name, sizeof(name), "%s/%08x.%s", LOCAL_COVERS, static_cast<unsigned>(hash), png ? "png" : "jpg");
+  return name;
+}
+
+std::string cacheEmbeddedCover(const std::string& audioPath, const uint64_t offset, const uint32_t length,
+                               const bool png) {
+  const std::string cached = embeddedCoverPath(audioPath, png);
+  const char* name = cached.c_str();
   SdIoMutex::Lock lock;
   if (SdMan.exists(name)) return name;
   SdMan.mkdir("/.system/cache");
@@ -642,6 +708,8 @@ std::vector<std::pair<std::string, Progress>> loadAllProgress() {
 
 void saveProgress() {
   if (!isOpen) return;
+  // A streamed book keeps its place on the Audiobooks page's recent list.
+  if (remote) noteRecent(book.absItemId, book.title, bookAuthor, bookMs(), bookDurationMs());
   if (isAbsBook()) {
     const uint32_t now = bookMs();
     const uint32_t moved = now > lastPushedBookMs ? now - lastPushedBookMs : lastPushedBookMs - now;
@@ -1002,6 +1070,19 @@ std::vector<Book> listBooks() {
   return books;
 }
 
+std::vector<RecentStream> recentStreams() { return loadRecent(); }
+
+std::string coverFor(const Book& b) {
+  if (!b.absItemId.empty() && AbsCovers::cached(b.absItemId)) return AbsCovers::path(b.absItemId);
+  if (b.folder) return folderCover(b.path);
+  SdIoMutex::Lock lock;
+  for (const bool png : {false, true}) {
+    const std::string cached = embeddedCoverPath(b.path, png);
+    if (SdMan.exists(cached.c_str())) return cached;
+  }
+  return "";
+}
+
 bool open(const Book& next) {
   stop();
   wifiParked = false;
@@ -1062,6 +1143,7 @@ bool openRemote(const Abs::ItemDetail& item) {
     return TrackInfo{"", t.contentUrl, t.filename, t.startOffsetMs, t.durationMs};
   });
   bookChapters = item.chapters;
+  bookAuthor = item.author;
   // The server's cover: cached, or fetched now (the screen shows it once it is on the card).
   coverPath = AbsCovers::path(item.id);
   if (!AbsCovers::cached(item.id)) AbsCovers::request({item.id});
@@ -1070,7 +1152,9 @@ bool openRemote(const Abs::ItemDetail& item) {
     return false;
   }
   progressKey = ABS_KEY_PREFIX + item.id;
-  return startBook();
+  const bool started = startBook();
+  if (started) noteRecent(item.id, item.title, item.author, bookMs(), bookDurationMs());
+  return started;
 }
 
 void stop() {
