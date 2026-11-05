@@ -253,12 +253,21 @@ void Mp4Source::parseTitle(const Box& moov) {
   const char name[4] = {static_cast<char>(0xA9), 'n', 'a', 'm'};
   Box box;
   uint64_t at = ilst.payload;
+  // ©nam (the title) and covr (cover art: a data box whose type is 13 for JPEG, 14 for PNG; the
+  // image follows its 8-byte type and locale).
   while (readBox(at, ilst.end, box)) {
-    if (std::memcmp(box.type, name, 4) == 0 && findChild(box.payload, box.end, "data", data)) {
+    if (std::memcmp(box.type, name, 4) == 0 && title_.empty() && findChild(box.payload, box.end, "data", data)) {
       const size_t length = static_cast<size_t>(std::min<uint64_t>(data.end - data.payload - 8, 200));
       std::string text(length, '\0');
       if (file_->seekSet(data.payload + 8) && file_->read(&text[0], length) == static_cast<int>(length)) title_ = text;
-      return;
+    } else if (std::memcmp(box.type, "covr", 4) == 0 && coverLength_ == 0 &&
+               findChild(box.payload, box.end, "data", data) && data.end > data.payload + 8) {
+      uint32_t type = 0;
+      if (readU32(data.payload, type) && ((type & 0xFFFFFF) == 13 || (type & 0xFFFFFF) == 14)) {
+        coverOffset_ = data.payload + 8;
+        coverLength_ = static_cast<uint32_t>(std::min<uint64_t>(data.end - coverOffset_, UINT32_MAX));
+        coverPng_ = (type & 0xFFFFFF) == 14;
+      }
     }
     at = box.end;
   }

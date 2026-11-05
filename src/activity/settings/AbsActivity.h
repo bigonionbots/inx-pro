@@ -131,6 +131,10 @@ class AbsActivity final : public ActivityWithSubactivity {
   void renderDetail(int y);
   void renderDownload(int y);
   void button(int x, int y, int w, int h, const char* label, Action action, int index = 0, bool filled = false);
+  /** The item's cached cover, or a placeholder (noting it for AbsCovers::request()). */
+  void drawCover(const std::string& itemId, int x, int y, int size);
+  std::vector<std::string> missingCovers;  ///< during render()
+  uint32_t renderedCovers = 0;             ///< AbsCovers::changeCounter() at the last render
   void row(int y, int height, Action action, int index);
   int booksPerPage() const;
 };

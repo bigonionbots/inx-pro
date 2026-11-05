@@ -31,6 +31,14 @@ class Mp4Source final : public AudioSource {
   /** ©nam from the iTunes metadata, empty if absent. */
   const std::string& title() const { return title_; }
   const std::vector<AudioChapter>& chapters() const override { return chapters_; }
+  /** iTunes covr: JPEG or PNG. */
+  bool embeddedCover(uint64_t& offset, uint32_t& length, bool& png) const override {
+    if (coverLength_ == 0) return false;
+    offset = coverOffset_;
+    length = coverLength_;
+    png = coverPng_;
+    return true;
+  }
 
  private:
   struct Box {
@@ -69,6 +77,9 @@ class Mp4Source final : public AudioSource {
   uint64_t fileSize_ = 0;
   std::string title_;
   std::vector<AudioChapter> chapters_;
+  uint64_t coverOffset_ = 0;
+  uint32_t coverLength_ = 0;
+  bool coverPng_ = false;
 
   // Track
   uint32_t timescale_ = 0;

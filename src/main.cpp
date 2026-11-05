@@ -52,6 +52,7 @@
 #endif
 #if INX_HAS_AUDIO_MODULE
 #include "abs/AbsClient.h"
+#include "abs/AbsCovers.h"
 #include "abs/AbsWifi.h"
 #include "activity/settings/AbsActivity.h"
 #include "activity/settings/AudioPlayerActivity.h"
@@ -481,6 +482,7 @@ void loop() {
   AudioModule::service();
   AudioPlayer::service();
   Abs::service();
+  AbsCovers::service();
 #endif
 
   LibraryIndexRefresh::render(renderer);

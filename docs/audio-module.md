@@ -209,6 +209,19 @@ Listen Again, a few books each with the listening progress. **All books** is the
 title; with more than one library, **Libraries** switches. Back from a book opened on a shelf
 reloads them, so Continue Listening is current.
 
+**Covers.** Shelf and list rows show each book's cover, its page a larger one. A cover is fetched
+once, as a 240 px wide JPEG the server scales (`/api/items/:id/cover?width=240&format=jpeg`), and
+kept in `/.system/cache/abs-covers/<item id>.jpg`, so it draws from the card at once and offline.
+`AbsCovers` fetches missing ones on a long-lived task over one kept-alive connection (one TLS
+handshake for a screenful), only while Wi-Fi is already up; the main loop writes them to the card,
+and the screen redraws at most every 2 s while they arrive. Until then a dotted square stands in.
+A book with no cover keeps the square; delete the folder to fetch them all again.
+
+**Now Playing** shows the book's cover at the top left, with the title and chapter beside it. An
+Audiobookshelf book uses the cached cover above (fetched when it opens, if online); a local book
+uses `cover`/`folder`/`front` `.jpg`/`.png` in its folder, else its first image, else (a single
+`.m4b`) the art embedded in the file (`covr`), copied once to `/.system/cache/audio-covers/`.
+
 **Sign-in.** The server URL, username and password are entered once. The client uses the v2.26+
 JWT scheme, checked against the v2.37.1 server source:
 - `POST /login` with `x-return-tokens: true` returns `user.accessToken` and `user.refreshToken`.

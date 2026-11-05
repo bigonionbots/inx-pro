@@ -67,6 +67,8 @@ struct View {
   uint8_t volume = 0;
   uint32_t queuedBytes = 0;  ///< audio read from the card, not yet sent to the module
   std::string message;       ///< last error or notice
+  /** The book's cover image on the card (JPEG or PNG), empty if none; may appear later (fetched). */
+  std::string coverPath;
 };
 
 /** Starts the sender task. Call once at boot. */

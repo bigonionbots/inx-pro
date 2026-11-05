@@ -40,6 +40,13 @@ class AudioSource {
     static const std::vector<AudioChapter> none;
     return none;
   }
+  /** Where cover art embedded in the file is (offset and length in the file), if it has any. */
+  virtual bool embeddedCover(uint64_t& offset, uint32_t& length, bool& png) const {
+    (void)offset;
+    (void)length;
+    (void)png;
+    return false;
+  }
   /** Why open() failed, for the player's message line. */
   const std::string& error() const { return error_; }
 

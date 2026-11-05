@@ -99,8 +99,11 @@ START=9500
 END=15000
 title=Chapter 2 - Ünïcödé
 META
-  ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=440:duration=15" -i "$CH/meta.txt" -map_metadata 1 \
-    -map_chapters 1 -c:a aac -b:a 32k -f ipod "$CH/qt.m4b"
+  # With cover art (covr), as an .m4b's front cover usually is.
+  ffmpeg -loglevel error -y -f lavfi -i "color=c=gray:s=64x64:d=1" -frames:v 1 "$CH/cover.jpg"
+  ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=440:duration=15" -i "$CH/meta.txt" -i "$CH/cover.jpg" \
+    -map 0:a -map 2:v -map_metadata 1 -map_chapters 1 -c:a aac -b:a 32k -c:v copy -disposition:v attached_pic \
+    -f ipod "$CH/qt.m4b"
   python3 - "$CH/qt.m4b" "$CH/nero.m4b" <<'PY'
 import sys
 d = bytearray(open(sys.argv[1], "rb").read())
@@ -115,7 +118,7 @@ PY
     "$ROOT_DIR/test/gb_host/mp4_chapters_test.cpp" "$ROOT_DIR/src/audio/Mp4Source.cpp" -o "$BUILD_DIR/mp4_chapters_test"
   for f in qt.m4b nero.m4b; do
     "$BUILD_DIR/mp4_chapters_test" "$CH/$f" 3 0 "Opening Credits" 4000 "Chapter 1: The Beginning" \
-      9500 "Chapter 2 - Ünïcödé"
+      9500 "Chapter 2 - Ünïcödé" --cover "$CH/cover.jpg"
   done
 else
   echo "MP4 chapter tests skipped: ffmpeg is needed to make the test files"

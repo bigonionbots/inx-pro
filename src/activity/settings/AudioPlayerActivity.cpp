@@ -8,15 +8,19 @@
 #if INX_HAS_AUDIO_MODULE
 
 #include <GfxRenderer.h>
+#include <ImageRender.h>
+#include <SDCardManager.h>
 
 #include <algorithm>
 #include <cstdio>
 
+#include "abs/AbsCovers.h"
 #include "activity/page/SubPage.h"
 #include "system/AudioLink.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
 #include "system/UiLayout.h"
+#include "util/SdIoMutex.h"
 
 extern void onGoToAudiobookshelf();
 
@@ -178,10 +182,13 @@ void AudioPlayerActivity::loop() {
 
 std::string AudioPlayerActivity::stateKey() const {
   const AudioPlayer::View v = AudioPlayer::view();
-  char key[160];
-  snprintf(key, sizeof(key), "%d%d%d%d|%u|%u|%u|%u|%d|%d|%zu|%s", v.open, v.paused, v.finished, v.waitingForModule,
-           static_cast<unsigned>(v.moduleState), static_cast<unsigned>(v.btState), static_cast<unsigned>(v.output),
-           v.volume, v.track, v.chapter, view == View::Output ? AudioLink::btDevices().size() : 0, v.message.c_str());
+  char key[200];
+  // The cover counter: a fetched cover appears without waiting for the next position redraw.
+  snprintf(key, sizeof(key), "%d%d%d%d|%u|%u|%u|%u|%d|%d|%zu|%lu|%s|%s", v.open, v.paused, v.finished,
+           v.waitingForModule, static_cast<unsigned>(v.moduleState), static_cast<unsigned>(v.btState),
+           static_cast<unsigned>(v.output), v.volume, v.track, v.chapter,
+           view == View::Output ? AudioLink::btDevices().size() : 0,
+           static_cast<unsigned long>(AbsCovers::changeCounter()), v.coverPath.c_str(), v.message.c_str());
   return key;
 }
 
@@ -351,9 +358,53 @@ void AudioPlayerActivity::renderNowPlaying(int y) {
     return;
   }
 
-  const std::string title = renderer.text.truncate(titleFont, v.title.c_str(), inner);
-  renderer.text.render(titleFont, MARGIN, y, title.c_str(), true, EpdFontFamily::BOLD);
-  y += renderer.text.getLineHeight(titleFont) + GAP;
+  // The cover at the top left, the title and chapter beside it; the rest full width under both.
+  const int blockTop = y;
+  const bool hasCover = !v.coverPath.empty();
+  const int coverSize = renderer.getScreenHeight() >= 800 ? 200 : 120;
+  int textX = MARGIN;
+  int textW = inner;
+  if (hasCover) {
+    bool drawn = false;
+    bool onCard = false;
+    {
+      SdIoMutex::Lock lock;
+      onCard = SdMan.exists(v.coverPath.c_str());
+    }
+    if (onCard) {
+      ImageRender::Options options;
+      options.cropToFill = true;
+      drawn = ImageRender::create(renderer, v.coverPath).render(MARGIN, y, coverSize, coverSize, options);
+    }
+    if (!drawn) renderer.rectangle.dotted(MARGIN, y, coverSize, coverSize, true);  // still being fetched
+    textX = MARGIN + coverSize + GAP;
+    textW = inner - coverSize - GAP;
+  }
+  // Up to two lines of title: whole words on the first, the rest truncated on the second.
+  std::string first;
+  std::string rest = v.title;
+  for (size_t at = 0; at <= v.title.size();) {
+    const size_t space = v.title.find(' ', at);
+    const size_t end = space == std::string::npos ? v.title.size() : space;
+    const std::string candidate = v.title.substr(0, end);
+    if (renderer.text.getWidth(titleFont, candidate.c_str()) > textW) break;
+    first = candidate;
+    rest = end < v.title.size() ? v.title.substr(end + 1) : "";
+    if (space == std::string::npos) break;
+    at = space + 1;
+  }
+  if (first.empty()) {
+    first = renderer.text.truncate(titleFont, v.title.c_str(), textW);
+    rest.clear();
+  }
+  renderer.text.render(titleFont, textX, y, first.c_str(), true, EpdFontFamily::BOLD);
+  y += renderer.text.getLineHeight(titleFont);
+  if (!rest.empty()) {
+    renderer.text.render(titleFont, textX, y, renderer.text.truncate(titleFont, rest.c_str(), textW).c_str(), true,
+                         EpdFontFamily::BOLD);
+    y += renderer.text.getLineHeight(titleFont);
+  }
+  y += GAP;
 
   // With chapters, the time and bar are the chapter's and the buttons step through chapters;
   // without, the track's (a folder's files).
@@ -362,14 +413,15 @@ void AudioPlayerActivity::renderNowPlaying(int y) {
     char line[200];
     snprintf(line, sizeof(line), "Chapter %d of %d%s%s", v.chapter + 1, v.chapterCount,
              v.chapterTitle.empty() ? "" : ": ", v.chapterTitle.c_str());
-    renderer.text.render(font, MARGIN, y, renderer.text.truncate(font, line, inner).c_str(), true, EpdFontFamily::BOLD);
+    renderer.text.render(font, textX, y, renderer.text.truncate(font, line, textW).c_str(), true, EpdFontFamily::BOLD);
     y += renderer.text.getLineHeight(font) + GAP;
   } else if (v.trackCount > 1) {
     char line[160];
     snprintf(line, sizeof(line), "Track %d of %d: %s", v.track + 1, v.trackCount, v.trackName.c_str());
-    renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, line, inner).c_str());
+    renderer.text.render(smallFont, textX, y, renderer.text.truncate(smallFont, line, textW).c_str());
     y += renderer.text.getLineHeight(smallFont) + GAP;
   }
+  if (hasCover) y = std::max(y, blockTop + coverSize + GAP);
 
   const uint32_t shownPosition = chaptered ? v.chapterPositionMs : v.positionMs;
   const uint32_t shownDuration = chaptered ? v.chapterDurationMs : v.durationMs;

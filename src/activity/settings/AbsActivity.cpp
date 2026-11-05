@@ -8,6 +8,7 @@
 #if INX_HAS_AUDIO_MODULE
 
 #include <GfxRenderer.h>
+#include <ImageRender.h>
 
 #include <algorithm>
 #include <cctype>
@@ -15,6 +16,7 @@
 #include <memory>
 #include <numeric>
 
+#include "abs/AbsCovers.h"
 #include "abs/AbsDownloader.h"
 #include "abs/AbsLocal.h"
 #include "abs/AbsWifi.h"
@@ -37,6 +39,11 @@ constexpr int BOOK_ROW_HEIGHT = 92;
 constexpr int SHELF_BOOKS = 4;
 constexpr int SHELF_INDEX = 64;
 constexpr int SHELF_ROW_HEIGHT = 84;
+/** Covers: square, inset in their row; on a book's page, larger beside its details. */
+constexpr int ROW_COVER_INSET = 6;
+constexpr int DETAIL_COVER = 180;
+/** While covers arrive, redraw at most this often (each redraw is a panel refresh). */
+constexpr unsigned long COVER_REDRAW_MS = 2000;
 constexpr unsigned long DOWNLOAD_REDRAW_MS = 3000;
 constexpr uint32_t WORKER_STACK = 12288;  // TLS
 
@@ -84,6 +91,7 @@ void AbsActivity::onEnter() {
 }
 
 void AbsActivity::onExit() {
+  AbsCovers::cancel();
   if (AbsDownloader::status().active) AbsDownloader::pause();
   // The worker writes into this activity: let it finish (a request times out within ~20 s).
   for (int i = 0; i < 500 && busy; ++i) vTaskDelay(pdMS_TO_TICKS(50));
@@ -296,8 +304,10 @@ void AbsActivity::loop() {
     if (mappedInput.wasPressed(MappedInputManager::Button::Down)) run(Action::PageDown, 0);
   }
 
+  const bool coversArrived = AbsCovers::changeCounter() != renderedCovers;
+  const bool coverTick = coversArrived && !busy && millis() - lastRenderMs >= COVER_REDRAW_MS;
   const bool downloadTick = view == View::Download && millis() - lastRenderMs >= DOWNLOAD_REDRAW_MS;
-  if (updateRequired || downloadTick) {
+  if (updateRequired || downloadTick || coverTick) {
     updateRequired = false;
     render();
   }
@@ -431,6 +441,16 @@ void AbsActivity::button(const int x, const int y, const int w, const int h, con
   targets.push_back({x, y, w, h, action, index});
 }
 
+void AbsActivity::drawCover(const std::string& itemId, const int x, const int y, const int size) {
+  if (AbsCovers::cached(itemId)) {
+    ImageRender::Options options;
+    options.cropToFill = true;  // square, whatever the cover's shape
+    if (ImageRender::create(renderer, AbsCovers::path(itemId)).render(x, y, size, size, options)) return;
+  }
+  renderer.rectangle.dotted(x, y, size, size, true);
+  missingCovers.push_back(itemId);
+}
+
 void AbsActivity::row(const int y, const int height, const Action action, const int index) {
   const int width = renderer.getScreenWidth();
   renderer.line.render(0, y + height - 1, width, y + height - 1, true, LineRender::Style::Dotted);
@@ -439,6 +459,8 @@ void AbsActivity::row(const int y, const int height, const Action action, const 
 
 void AbsActivity::render() {
   targets.clear();
+  missingCovers.clear();
+  renderedCovers = AbsCovers::changeCounter();
   renderer.clearScreen();
   const char* titles[] = {"Audiobookshelf", "Libraries", "Books", "Book", "Download", "Audiobookshelf"};
   const bool named = (view == View::Books || view == View::Home) && !library.name.empty() && libraries.size() > 1;
@@ -512,6 +534,7 @@ void AbsActivity::render() {
   }
   renderer.displayBuffer();
   lastRenderMs = millis();
+  AbsCovers::request(missingCovers);
 }
 
 void AbsActivity::renderSignIn(int y) {
@@ -566,7 +589,11 @@ void AbsActivity::renderBooks(int y) {
   if (books.empty()) renderer.text.render(font, MARGIN, y, "No books.");
   for (size_t i = 0; i < books.size(); ++i) {
     const Abs::ItemSummary& b = books[i];
-    renderer.text.render(font, MARGIN, y + 10, renderer.text.truncate(font, b.title.c_str(), inner).c_str(), true,
+    const int cover = BOOK_ROW_HEIGHT - 2 * ROW_COVER_INSET;
+    drawCover(b.id, MARGIN, y + ROW_COVER_INSET, cover);
+    const int textX = MARGIN + cover + GAP;
+    const int textW = inner - cover - GAP;
+    renderer.text.render(font, textX, y + 10, renderer.text.truncate(font, b.title.c_str(), textW).c_str(), true,
                          EpdFontFamily::BOLD);
     std::string info = b.author.empty() ? "" : b.author + "  -  ";
     info += formatDuration(b.durationSec);
@@ -578,8 +605,8 @@ void AbsActivity::renderBooks(int y) {
     const auto local =
         std::find_if(downloaded.begin(), downloaded.end(), [&b](const auto& entry) { return entry.first == b.id; });
     if (local != downloaded.end()) info += local->second ? "  -  on device" : "  -  partly downloaded";
-    renderer.text.render(smallFont, MARGIN, y + 16 + renderer.text.getLineHeight(font),
-                         renderer.text.truncate(smallFont, info.c_str(), inner).c_str());
+    renderer.text.render(smallFont, textX, y + 16 + renderer.text.getLineHeight(font),
+                         renderer.text.truncate(smallFont, info.c_str(), textW).c_str());
     row(y, BOOK_ROW_HEIGHT, Action::OpenBook, static_cast<int>(i));
     y += BOOK_ROW_HEIGHT;
   }
@@ -615,7 +642,11 @@ void AbsActivity::renderHome(int y) {
     y += labelH;
     for (size_t i = 0; i < shelf.items.size() && y + SHELF_ROW_HEIGHT <= buttonsY - GAP; ++i) {
       const Abs::ItemSummary& b = shelf.items[i];
-      renderer.text.render(font, MARGIN, y + 8, renderer.text.truncate(font, b.title.c_str(), inner).c_str(), true,
+      const int cover = SHELF_ROW_HEIGHT - 2 * ROW_COVER_INSET;
+      drawCover(b.id, MARGIN, y + ROW_COVER_INSET, cover);
+      const int textX = MARGIN + cover + GAP;
+      const int textW = inner - cover - GAP;
+      renderer.text.render(font, textX, y + 8, renderer.text.truncate(font, b.title.c_str(), textW).c_str(), true,
                            EpdFontFamily::BOLD);
       // Progress first, so a long author name truncates instead of it.
       std::string info;
@@ -627,7 +658,7 @@ void AbsActivity::renderHome(int y) {
       if (!b.author.empty()) info += b.author + "  -  ";
       info += formatDuration(b.durationSec);
       const int infoY = y + 12 + renderer.text.getLineHeight(font);
-      renderer.text.render(smallFont, MARGIN, infoY, renderer.text.truncate(smallFont, info.c_str(), inner).c_str());
+      renderer.text.render(smallFont, textX, infoY, renderer.text.truncate(smallFont, info.c_str(), textW).c_str());
       row(y, SHELF_ROW_HEIGHT, Action::OpenShelfBook, static_cast<int>(s) * SHELF_INDEX + static_cast<int>(i));
       y += SHELF_ROW_HEIGHT;
     }
@@ -650,11 +681,38 @@ void AbsActivity::renderDetail(int y) {
   constexpr int titleFont = MONTSERRAT_18_FONT_ID;
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
 
-  renderer.text.render(titleFont, MARGIN, y, renderer.text.truncate(titleFont, detail.title.c_str(), inner).c_str(),
-                       true, EpdFontFamily::BOLD);
-  y += renderer.text.getLineHeight(titleFont) + GAP;
+  // The cover on the left, the details beside it; the buttons go under whichever is taller.
+  const int coverTop = y;
+  drawCover(detail.id, MARGIN, coverTop, DETAIL_COVER);
+  const int textX = MARGIN + DETAIL_COVER + GAP;
+  const int textW = inner - DETAIL_COVER - GAP;
+  // The title may take two lines here: whole words on the first, the rest truncated on the second.
+  std::string first;
+  std::string rest = detail.title;
+  for (size_t at = 0; at <= detail.title.size();) {
+    const size_t space = detail.title.find(' ', at);
+    const size_t end = space == std::string::npos ? detail.title.size() : space;
+    const std::string candidate = detail.title.substr(0, end);
+    if (renderer.text.getWidth(titleFont, candidate.c_str()) > textW) break;
+    first = candidate;
+    rest = end < detail.title.size() ? detail.title.substr(end + 1) : "";
+    if (space == std::string::npos) break;
+    at = space + 1;
+  }
+  if (first.empty()) {
+    first = renderer.text.truncate(titleFont, detail.title.c_str(), textW);  // one long word
+    rest.clear();
+  }
+  renderer.text.render(titleFont, textX, y, first.c_str(), true, EpdFontFamily::BOLD);
+  y += renderer.text.getLineHeight(titleFont);
+  if (!rest.empty()) {
+    renderer.text.render(titleFont, textX, y, renderer.text.truncate(titleFont, rest.c_str(), textW).c_str(), true,
+                         EpdFontFamily::BOLD);
+    y += renderer.text.getLineHeight(titleFont);
+  }
+  y += GAP;
   if (!detail.author.empty()) {
-    renderer.text.render(font, MARGIN, y, renderer.text.truncate(font, detail.author.c_str(), inner).c_str());
+    renderer.text.render(font, textX, y, renderer.text.truncate(font, detail.author.c_str(), textW).c_str());
     y += renderer.text.getLineHeight(font) + GAP;
   }
   const uint64_t size = std::accumulate(detail.tracks.begin(), detail.tracks.end(), uint64_t{0},
@@ -663,15 +721,15 @@ void AbsActivity::renderDetail(int y) {
   snprintf(info, sizeof(info), "%s  -  %u %s  -  %s", formatDuration(detail.durationMs / 1000).c_str(),
            static_cast<unsigned>(detail.tracks.size()), detail.tracks.size() == 1 ? "file" : "files",
            formatMb(size).c_str());
-  renderer.text.render(smallFont, MARGIN, y, info);
+  renderer.text.render(smallFont, textX, y, renderer.text.truncate(smallFont, info, textW).c_str());
   y += renderer.text.getLineHeight(smallFont) + 4;
   if (serverProgress.exists) {
     snprintf(info, sizeof(info), "Listened: %s of %s%s", formatDuration(serverProgress.currentMs / 1000).c_str(),
              formatDuration(detail.durationMs / 1000).c_str(), serverProgress.finished ? " (finished)" : "");
-    renderer.text.render(smallFont, MARGIN, y, info);
+    renderer.text.render(smallFont, textX, y, renderer.text.truncate(smallFont, info, textW).c_str());
     y += renderer.text.getLineHeight(smallFont) + 4;
   }
-  y += 2 * GAP;
+  y = std::max(y, coverTop + DETAIL_COVER) + 2 * GAP;
 
   button(MARGIN, y, inner, BUTTON_HEIGHT, "Stream over Wi-Fi", Action::Stream, 0, !localComplete);
   y += BUTTON_HEIGHT + GAP;

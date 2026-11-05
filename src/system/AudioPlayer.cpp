@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <memory>
@@ -24,6 +25,7 @@
 #include "AudioLink.h"
 #include "AudioModule.h"
 #include "abs/AbsClient.h"
+#include "abs/AbsCovers.h"
 #include "abs/AbsLocal.h"
 #include "abs/AbsWifi.h"
 #include "audio/AudioSource.h"
@@ -426,6 +428,7 @@ Book book;
 std::string progressKey;
 std::vector<TrackInfo> tracks;
 std::vector<AudioChapter> bookChapters;  // in the whole book; empty when the book has none
+std::string coverPath;                   // see View::coverPath
 int track = 0;
 std::unique_ptr<AudioSource> source;  // SD tracks only; streamed tracks live on the feeder task
 uint32_t trackDurationMs = 0;
@@ -480,6 +483,74 @@ bool naturalLess(const std::string& a, const std::string& b) {
   }
   // Equal so far: the one that ran out first sorts first.
   return i == a.size() && j < b.size();
+}
+
+constexpr const char* LOCAL_COVERS = "/.system/cache/audio-covers";
+
+bool isImageName(const std::string& name, const bool preferredOnly) {
+  std::string lower = name;
+  std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+  const size_t dot = lower.rfind('.');
+  if (dot == std::string::npos || lower[0] == '.') return false;
+  const std::string ext = lower.substr(dot + 1);
+  if (ext != "jpg" && ext != "jpeg" && ext != "png") return false;
+  const std::string stem = lower.substr(0, dot);
+  return !preferredOnly || stem == "cover" || stem == "folder" || stem == "front";
+}
+
+/** A folder book's cover: cover/folder/front.jpg|png, else its first image. Holds SdIoMutex. */
+std::string folderCover(const std::string& folder) {
+  SdIoMutex::Lock lock;
+  FsFile dir = SdMan.open(folder.c_str(), O_RDONLY);
+  if (!dir || !dir.isDirectory()) return "";
+  std::string first;
+  std::string preferred;
+  char name[128];
+  for (FsFile entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
+    entry.getName(name, sizeof(name));
+    const bool file = !entry.isDirectory();
+    entry.close();
+    if (!file || !isImageName(name, false)) continue;
+    if (first.empty()) first = name;
+    if (isImageName(name, true)) {
+      preferred = name;
+      break;
+    }
+  }
+  dir.close();
+  const std::string chosen = preferred.empty() ? first : preferred;
+  return chosen.empty() ? "" : folder + "/" + chosen;
+}
+
+/**
+ * Copies cover art embedded in an audio file into the cache once (named by a hash of the file's
+ * path), so the screen draws a small file rather than seeking into a large one. Holds SdIoMutex.
+ */
+std::string cacheEmbeddedCover(const std::string& audioPath, const uint64_t offset, const uint32_t length,
+                               const bool png) {
+  uint32_t hash = 2166136261u;
+  for (const unsigned char c : audioPath) hash = (hash ^ c) * 16777619u;
+  char name[48];
+  snprintf(name, sizeof(name), "%s/%08x.%s", LOCAL_COVERS, static_cast<unsigned>(hash), png ? "png" : "jpg");
+  SdIoMutex::Lock lock;
+  if (SdMan.exists(name)) return name;
+  SdMan.mkdir("/.system/cache");
+  SdMan.mkdir(LOCAL_COVERS);
+  FsFile in = SdMan.open(audioPath.c_str(), O_RDONLY);
+  const std::string temporary = std::string(name) + ".tmp";
+  FsFile out = SdMan.open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
+  bool ok = in && out && in.seekSet(offset);
+  uint8_t buffer[2048];
+  for (uint32_t left = length; ok && left > 0;) {
+    const int n = in.read(buffer, std::min<uint32_t>(left, sizeof(buffer)));
+    ok = n > 0 && out.write(buffer, static_cast<size_t>(n)) == static_cast<size_t>(n);
+    left -= n > 0 ? static_cast<uint32_t>(n) : left;
+  }
+  if (in) in.close();
+  if (out) out.close();
+  if (ok) ok = SdMan.rename(temporary.c_str(), name);
+  if (!ok) SdMan.remove(temporary.c_str());
+  return ok ? name : "";
 }
 
 std::vector<std::string> listAudioFiles(const std::string& folder) {
@@ -646,6 +717,13 @@ bool openTrack(const int index) {
   // A single .m4b has its chapters inside: used unless the server's are known (downloads made
   // before chapters were saved have none, and the file's are the same ones).
   if (tracks.size() == 1 && bookChapters.empty()) bookChapters = next->chapters();
+  // Cover art in the file, when the book has no other cover yet.
+  uint64_t coverOffset = 0;
+  uint32_t coverLength = 0;
+  bool coverPng = false;
+  if (coverPath.empty() && next->embeddedCover(coverOffset, coverLength, coverPng)) {
+    coverPath = cacheEmbeddedCover(info.path, coverOffset, coverLength, coverPng);
+  }
   source = std::move(next);
   return true;
 }
@@ -915,6 +993,7 @@ bool open(const Book& next) {
   remote = false;
   tracks.clear();
   bookChapters.clear();
+  coverPath.clear();
   AbsLocal::BookMeta meta;
   if (next.folder && AbsLocal::read(next.path, meta) && meta.complete) {
     // Downloaded from Audiobookshelf: the server's track order and offsets, and progress sync.
@@ -937,9 +1016,20 @@ bool open(const Book& next) {
     message = "No audio files";
     return false;
   }
+  // The cover: the server's (cached, or fetched now if online) for an Audiobookshelf book, else an
+  // image in the book's folder; a single file's embedded art is picked up when it opens.
+  if (isAbsBook() && AbsCovers::cached(book.absItemId)) {
+    coverPath = AbsCovers::path(book.absItemId);
+  } else {
+    if (isAbsBook()) AbsCovers::request({book.absItemId});
+    if (next.folder) coverPath = folderCover(next.path);
+  }
   // Downloaded and streamed copies of one Audiobookshelf book share their progress.
   progressKey = isAbsBook() ? ABS_KEY_PREFIX + book.absItemId : book.path;
-  return startBook();
+  const bool started = startBook();  // opens the first track, which may have embedded art
+  // Last resort for an Audiobookshelf book: the server's cover, shown once it has been fetched.
+  if (coverPath.empty() && isAbsBook()) coverPath = AbsCovers::path(book.absItemId);
+  return started;
 }
 
 bool openRemote(const Abs::ItemDetail& item) {
@@ -954,6 +1044,9 @@ bool openRemote(const Abs::ItemDetail& item) {
     return TrackInfo{"", t.contentUrl, t.filename, t.startOffsetMs, t.durationMs};
   });
   bookChapters = item.chapters;
+  // The server's cover: cached, or fetched now (the screen shows it once it is on the card).
+  coverPath = AbsCovers::path(item.id);
+  if (!AbsCovers::cached(item.id)) AbsCovers::request({item.id});
   if (tracks.empty()) {
     message = "No audio tracks";
     return false;
@@ -1100,6 +1193,7 @@ View view() {
   }
   v.queuedBytes = static_cast<uint32_t>(queue.usedBytes());
   v.message = message;
+  v.coverPath = isOpen ? coverPath : "";
   const AudioLink::ModuleStatus module = AudioLink::status();
   if (module.valid) {
     v.moduleState = static_cast<PlayState>(module.status.playState);
