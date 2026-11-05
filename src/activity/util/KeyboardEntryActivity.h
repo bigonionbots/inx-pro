@@ -108,7 +108,8 @@ class KeyboardEntryActivity : public Activity {
   int getRowCount() const;
   bool isSpecialRow(int row) const;
   char getSelectedChar() const;
-  void handleKeyPress();
+  /** True when it called onComplete: the owner may have deleted this activity, so touch nothing. */
+  bool handleKeyPress();
   void handleNumpadKeyPress();
   int getRowLength(int row) const;
   void render() const;

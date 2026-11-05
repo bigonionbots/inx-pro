@@ -343,29 +343,32 @@ void AbsActivity::startWork(const char* text, std::function<void(std::string& er
 void AbsActivity::requestWifi(std::function<void()> then) {
   pending = std::move(then);
   enterNewActivity(new WifiSelectionActivity(renderer, mappedInput, [this](const bool connected) {
-    exitActivity();
+    // This lambda lives in the picker, which exitActivity() deletes: everything after it must
+    // use locals only (reading `this` from the freed closure crashed now and then).
+    AbsActivity* const self = this;
+    self->exitActivity();
     AbsWifi::prepare();  // the picker may have saved a network
     if (connected) {
       AbsWifi::adopt();
-      offline = false;
+      self->offline = false;
       // The screen keeps the connection until it is left (onExit releases it). Otherwise work
       // that holds it only while it runs (a refresh) would turn Wi-Fi off when done, and the
       // next book opened would ask for Wi-Fi again.
       std::string ignored;
-      if (!wifiHeld && AbsWifi::acquire(ignored)) wifiHeld = true;
-      if (pending) {
-        const std::function<void()> next = std::move(pending);
-        pending = nullptr;
+      if (!self->wifiHeld && AbsWifi::acquire(ignored)) self->wifiHeld = true;
+      if (self->pending) {
+        const std::function<void()> next = std::move(self->pending);
+        self->pending = nullptr;
         next();
       }
     } else {
       AbsWifi::offIfUnused();
-      wifiNeeded = true;
-      xSemaphoreTake(dataLock, portMAX_DELAY);
-      error = "Audiobookshelf needs Wi-Fi.";
-      xSemaphoreGive(dataLock);
+      self->wifiNeeded = true;
+      xSemaphoreTake(self->dataLock, portMAX_DELAY);
+      self->error = "Audiobookshelf needs Wi-Fi.";
+      xSemaphoreGive(self->dataLock);
     }
-    updateRequired = true;
+    self->updateRequired = true;
   }));
 }
 
@@ -398,13 +401,16 @@ void AbsActivity::editField(const char* title, std::string& field, const bool se
   enterNewActivity(new KeyboardEntryActivity(
       renderer, mappedInput, title, field, 10, 128, secret,
       [this, &field](const std::string& text) {
+        // `text` is the keyboard's, and these lambdas live in it: copy first, then delete it.
+        AbsActivity* const self = this;
         field = text;
-        exitActivity();
-        updateRequired = true;
+        self->exitActivity();
+        self->updateRequired = true;
       },
       [this] {
-        exitActivity();
-        updateRequired = true;
+        AbsActivity* const self = this;
+        self->exitActivity();
+        self->updateRequired = true;
       }));
 }
 
@@ -547,10 +553,11 @@ void AbsActivity::run(const Action action, const int index) {
     }
     case Action::WifiSettings:
       enterNewActivity(new WifiSelectionActivity(renderer, mappedInput, [this](const bool connected) {
-        exitActivity();
+        AbsActivity* const self = this;  // the closure dies with the picker (see requestWifi)
+        self->exitActivity();
         AbsWifi::prepare();
         if (connected) AbsWifi::adopt();
-        updateRequired = true;
+        self->updateRequired = true;
       }));
       return;
     case Action::RetryWifi:
@@ -612,16 +619,20 @@ void AbsActivity::run(const Action action, const int index) {
           renderer, mappedInput, "Search titles and authors", listKind == ListKind::Search ? listKey : "", 10, 64,
           false,
           [this](const std::string& text) {
-            exitActivity();
-            if (text.empty()) {
-              updateRequired = true;
+            // Copy the query and `this` before the keyboard (which owns both) is deleted.
+            AbsActivity* const self = this;
+            const std::string query = text;
+            self->exitActivity();
+            if (query.empty()) {
+              self->updateRequired = true;
             } else {
-              openList(ListKind::Search, text);
+              self->openList(ListKind::Search, query);
             }
           },
           [this] {
-            exitActivity();
-            updateRequired = true;
+            AbsActivity* const self = this;
+            self->exitActivity();
+            self->updateRequired = true;
           }));
       return;
     case Action::ShowLetters:

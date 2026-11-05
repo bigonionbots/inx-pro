@@ -202,10 +202,10 @@ void KeyboardEntryActivity::handleNumpadKeyPress() {
 
 }
 
-void KeyboardEntryActivity::handleKeyPress() {
+bool KeyboardEntryActivity::handleKeyPress() {
   if (isNumpadLayout()) {
     handleNumpadKeyPress();
-    return;
+    return false;
   }
 
   if (selectedRow == SPECIAL_ROW) {
@@ -219,34 +219,35 @@ void KeyboardEntryActivity::handleKeyPress() {
       } else {
         shiftActive = true;
       }
-      return;
+      return false;
     }
 
     if (selectedCol >= SPACE_COL && selectedCol < BACKSPACE_COL) {
       if (maxLength == 0 || text.length() < maxLength) {
         text += ' ';
       }
-      return;
+      return false;
     }
 
     if (selectedCol >= BACKSPACE_COL && selectedCol < DONE_COL) {
       if (!text.empty()) {
         text.pop_back();
       }
-      return;
+      return false;
     }
 
     if (selectedCol >= DONE_COL) {
       if (onComplete) {
-        onComplete(text);
+        onComplete(text);  // the owner usually deletes this keyboard here
+        return true;
       }
-      return;
+      return false;
     }
   }
 
   const char c = getSelectedChar();
   if (c == '\0' || c == ' ') {
-    return;
+    return false;
   }
 
   if (maxLength == 0 || text.length() < maxLength) {
@@ -256,6 +257,7 @@ void KeyboardEntryActivity::handleKeyPress() {
       shiftActive = false;
     }
   }
+  return false;
 }
 
 void KeyboardEntryActivity::loop() {
@@ -338,7 +340,7 @@ void KeyboardEntryActivity::loop() {
           const int rowLength = getRowLength(row);
           selectedCol = std::min(rowLength - 1, (tapX * rowLength) / pageWidth);
         }
-        handleKeyPress();
+        if (handleKeyPress()) return;  // closed: this keyboard may be gone
         updateRequired = true;
         return;
       }
@@ -433,13 +435,14 @@ void KeyboardEntryActivity::loop() {
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    handleKeyPress();
+    if (handleKeyPress()) return;  // closed: this keyboard may be gone
     updateRequired = true;
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     if (onCancel) {
-      onCancel();
+      onCancel();  // the owner usually deletes this keyboard here: touch nothing after
+      return;
     }
     updateRequired = true;
   }
