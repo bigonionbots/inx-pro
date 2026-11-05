@@ -20,9 +20,12 @@
 #include <mbedtls/error.h>
 #include <mbedtls/platform.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <string_view>
 #include <utility>
 
+#include "AbsIndex.h"
 #include "util/SdIoMutex.h"
 
 namespace Abs {
@@ -532,6 +535,101 @@ bool shelves(const std::string& libraryId, const int perShelf, std::vector<Shelf
     for (ItemSummary& item : s.items) all.push_back(&item);
   }
   addProgress(all);
+  return true;
+}
+
+/**
+ * ArduinoJson keeps every string it parses as its own allocation; small ones land in internal RAM,
+ * which a page of a large library would eat. This allocator puts them in PSRAM.
+ */
+class PsramJsonAllocator final : public ArduinoJson::Allocator {
+ public:
+  void* allocate(size_t size) override { return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
+  void deallocate(void* pointer) override { heap_caps_free(pointer); }
+  void* reallocate(void* pointer, size_t size) override {
+    return heap_caps_realloc(pointer, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+};
+
+bool libraryIndex(const std::string& libraryId, AbsIndex& out, std::string& error) {
+  constexpr int PAGE = 100;
+  static PsramJsonAllocator psram;
+
+  // The user's progress first: one request, kept as (id, progress, finished) sorted by id.
+  struct ProgressEntry {
+    uint32_t id;  // offset in ids
+    float progress;
+    bool finished;
+  };
+  EpubPsramString ids;
+  AbsIndex::PsramVector<ProgressEntry> progress;
+  {
+    Response me;
+    if (!api(HTTP_METHOD_GET, "/api/me", "", me, error)) return false;
+    JsonDocument filter(&psram);
+    JsonObject p = filter["mediaProgress"][0].to<JsonObject>();
+    p["libraryItemId"] = true;
+    p["progress"] = true;
+    p["isFinished"] = true;
+    JsonDocument doc(&psram);
+    if (deserializeJson(doc, me.body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) {
+      error = "Unexpected reply from the server";
+      return false;
+    }
+    for (JsonObject entry : doc["mediaProgress"].as<JsonArray>()) {
+      const char* id = entry["libraryItemId"] | "";
+      if (!*id) continue;
+      progress.push_back({static_cast<uint32_t>(ids.size()), entry["progress"] | 0.0f, entry["isFinished"] | false});
+      ids.append(id);
+      ids.push_back('\0');
+    }
+  }
+  const auto idOf = [&ids](const ProgressEntry& e) { return std::string_view(ids.c_str() + e.id); };
+  std::sort(progress.begin(), progress.end(),
+            [&](const ProgressEntry& a, const ProgressEntry& b) { return idOf(a) < idOf(b); });
+
+  out.clear();
+  int total = 0;
+  for (int page = 0;; ++page) {
+    Response response;
+    const std::string path = "/api/libraries/" + libraryId + "/items?limit=" + std::to_string(PAGE) +
+                             "&page=" + std::to_string(page) + "&sort=media.metadata.title&minified=1";
+    if (!api(HTTP_METHOD_GET, path, "", response, error)) return false;
+    JsonDocument filter(&psram);
+    filter["total"] = true;
+    JsonObject result = filter["results"][0].to<JsonObject>();
+    result["id"] = true;
+    result["media"]["metadata"]["title"] = true;
+    result["media"]["metadata"]["titleIgnorePrefix"] = true;
+    result["media"]["metadata"]["authorName"] = true;
+    result["media"]["duration"] = true;
+    result["media"]["size"] = true;
+    JsonDocument doc(&psram);
+    if (deserializeJson(doc, response.body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) {
+      error = "Unexpected reply from the server";
+      return false;
+    }
+    total = doc["total"] | 0;
+    JsonArray results = doc["results"].as<JsonArray>();
+    for (JsonObject entry : results) {
+      const std::string_view id = entry["id"] | "";
+      if (id.empty()) continue;
+      float itemProgress = 0.0f;
+      bool finished = false;
+      const auto at = std::lower_bound(progress.begin(), progress.end(), id,
+                                       [&](const ProgressEntry& e, std::string_view key) { return idOf(e) < key; });
+      if (at != progress.end() && idOf(*at) == id) {
+        itemProgress = at->progress;
+        finished = at->finished;
+      }
+      JsonObject metadata = entry["media"]["metadata"];
+      out.add(id, metadata["title"] | "", metadata["titleIgnorePrefix"] | "", metadata["authorName"] | "",
+              static_cast<uint32_t>(entry["media"]["duration"] | 0.0), entry["media"]["size"] | 0ull, itemProgress,
+              finished);
+    }
+    if (results.size() == 0 || static_cast<int>(out.size()) >= total) break;
+  }
+  out.finish();
   return true;
 }
 

@@ -18,6 +18,7 @@
 
 #include "abs/AbsCovers.h"
 #include "abs/AbsDownloader.h"
+#include "abs/AbsLibrary.h"
 #include "abs/AbsLocal.h"
 #include "abs/AbsWifi.h"
 #include "activity/network/WifiSelectionActivity.h"
@@ -46,6 +47,13 @@ constexpr int DETAIL_COVER = 180;
 constexpr unsigned long COVER_REDRAW_MS = 2000;
 constexpr unsigned long DOWNLOAD_REDRAW_MS = 3000;
 constexpr uint32_t WORKER_STACK = 12288;  // TLS
+/** The index is fetched again (in the background) at most this often, unless asked to. */
+constexpr unsigned long INDEX_REFRESH_MS = 10 * 60 * 1000;
+
+// Across visits to the screen (this boot): the library last opened, and when its index was fetched.
+std::string lastLibraryId;
+std::string indexFetchedFor;
+unsigned long indexFetchedMs = 0;
 
 std::string formatDuration(const uint32_t seconds) {
   char text[32];
@@ -84,17 +92,180 @@ void AbsActivity::onEnter() {
   server = Abs::serverUrl();
   user = Abs::username();
   if (Abs::signedIn()) {
-    loadLibraries();
+    if (!showCached()) loadLibraries();  // first visit: nothing cached, so wait for the server
   } else {
     showView(View::SignIn);
   }
 }
 
+bool AbsActivity::showCached() {
+  if (!AbsLibrary::loadLibraries(libraries)) return false;
+  const auto last =
+      std::find_if(libraries.begin(), libraries.end(), [](const Abs::Library& l) { return l.id == lastLibraryId; });
+  if (last != libraries.end()) {
+    library = *last;
+  } else if (libraries.size() == 1) {
+    library = libraries.front();
+  } else {
+    showView(View::More);  // several libraries and none chosen yet
+    startRefresh(false);
+    return true;
+  }
+  shelves.clear();
+  AbsLibrary::loadShelves(library.id, shelves);
+  index.clear();
+  AbsLibrary::loadIndex(library.id, index);
+  showView(View::Home);
+  startRefresh(false);
+  return true;
+}
+
+void AbsActivity::startRefresh(const bool force) {
+  if (refreshing || refreshTask || !Abs::signedIn()) return;
+  if (!AbsWifi::connected()) {
+    offline = true;  // browse the cache; Refresh (under More) asks for Wi-Fi
+    updateRequired = true;
+    return;
+  }
+  offline = false;
+  const bool wantIndex = !library.id.empty() && (force || index.empty() || indexFetchedFor != library.id ||
+                                                 millis() - indexFetchedMs > INDEX_REFRESH_MS);
+  refreshing = true;
+  refreshError.clear();
+  stagedHasIndex = false;
+  updateRequired = true;
+  auto* job = new WorkerJob();
+  job->body = [this, libraryId = library.id, wantIndex] {
+    std::string failure;
+    {
+      AbsWifi::Use wifi(failure);
+      if (wifi.ok() && Abs::libraries(stagedLibraries, failure) && !libraryId.empty() &&
+          Abs::shelves(libraryId, SHELF_BOOKS, stagedShelves, failure) && wantIndex) {
+        stagedHasIndex = Abs::libraryIndex(libraryId, stagedIndex, failure);
+      }
+    }
+    refreshError = failure;
+    refreshReady = true;
+    refreshing = false;
+  };
+  // A PSRAM stack: the index fetch runs alongside the screen, and internal RAM is short.
+  if (xTaskCreatePinnedToCoreWithCaps(
+          [](void* raw) {
+            {
+              std::unique_ptr<WorkerJob> j(static_cast<WorkerJob*>(raw));
+              j->body();
+            }
+            // A task with a PSRAM stack should not delete itself: the main loop deletes it once
+            // it is suspended (deleteRefreshTask()).
+            vTaskSuspend(nullptr);
+          },
+          "abs_refresh", WORKER_STACK, job, 1, &refreshTask, tskNO_AFFINITY,
+          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+    delete job;
+    refreshTask = nullptr;
+    refreshing = false;
+  }
+}
+
+/** Deletes the finished refresh task, once it has really suspended itself (it is just finishing). */
+void AbsActivity::deleteRefreshTask() {
+  if (!refreshTask) return;
+  for (int i = 0; i < 200 && eTaskGetState(refreshTask) != eSuspended; ++i) vTaskDelay(pdMS_TO_TICKS(5));
+  vTaskDeleteWithCaps(refreshTask);
+  refreshTask = nullptr;
+}
+
+void AbsActivity::applyRefresh() {
+  deleteRefreshTask();
+  if (!refreshError.empty()) {
+    // Keep showing the cache; More says why it did not update.
+    stagedLibraries.clear();
+    stagedShelves.clear();
+    stagedIndex.clear();
+    updateRequired = true;
+    return;
+  }
+  if (!stagedLibraries.empty()) {
+    libraries = std::move(stagedLibraries);
+    AbsLibrary::saveLibraries(libraries);
+    for (const Abs::Library& l : libraries) {
+      if (l.id == library.id) library.name = l.name;
+    }
+  }
+  if (!library.id.empty()) {
+    shelves = std::move(stagedShelves);
+    AbsLibrary::saveShelves(library.id, shelves);
+  }
+  if (stagedHasIndex) {
+    std::swap(index, stagedIndex);
+    stagedIndex.clear();
+    AbsLibrary::saveIndex(library.id, index);
+    indexFetchedFor = library.id;
+    indexFetchedMs = millis();
+    rebuildList();  // the book numbers changed with the index
+  }
+  stagedLibraries.clear();
+  stagedShelves.clear();
+  updateRequired = true;
+}
+
+void AbsActivity::openList(const ListKind kind, const std::string& key) {
+  listKind = kind;
+  listKey = key;
+  listFirst = 0;
+  rebuildList();
+  showView(View::List);
+}
+
+void AbsActivity::rebuildList() {
+  listBooks.clear();
+  switch (listKind) {
+    case ListKind::Az:
+      listBooks.assign(index.byTitle().begin(), index.byTitle().end());
+      break;
+    case ListKind::Author:
+      for (const AbsIndex::Author& a : index.authors()) {
+        if (index.text(a.name) != listKey) continue;
+        listBooks.assign(index.authorBooks().begin() + a.first, index.authorBooks().begin() + a.first + a.count);
+        break;
+      }
+      break;
+    case ListKind::Search:
+      listBooks = index.search(listKey);
+      break;
+  }
+  if (listFirst >= static_cast<int>(listBooks.size())) listFirst = 0;
+}
+
+void AbsActivity::openBook(const std::string& itemId, const View from) {
+  detailFrom = from;
+  if (!AbsWifi::connected()) {
+    // Offline: a downloaded book opens from what was saved with it.
+    AbsLocal::BookMeta meta;
+    if (AbsLocal::find(itemId, meta) && meta.complete) {
+      detail = Abs::ItemDetail{};
+      detail.id = meta.itemId;
+      detail.title = meta.title;
+      detail.author = meta.author;
+      detail.durationMs = meta.durationMs;
+      detail.tracks = meta.tracks;
+      detail.chapters = meta.chapters;
+      serverProgress = Abs::Progress{};
+      error.clear();
+      refreshLocalState();
+      showView(View::Detail);
+      return;
+    }
+  }
+  loadDetail(itemId);
+}
+
 void AbsActivity::onExit() {
   AbsCovers::cancel();
   if (AbsDownloader::status().active) AbsDownloader::pause();
-  // The worker writes into this activity: let it finish (a request times out within ~20 s).
-  for (int i = 0; i < 500 && busy; ++i) vTaskDelay(pdMS_TO_TICKS(50));
+  // The workers write into this activity: let them finish (a request times out within ~20 s).
+  for (int i = 0; i < 500 && (busy || refreshing); ++i) vTaskDelay(pdMS_TO_TICKS(50));
+  deleteRefreshTask();
   ActivityWithSubactivity::onExit();
   // A worker still running keeps its Wi-Fi until it returns; release() only drops our share.
   if (wifiHeld.exchange(false)) AbsWifi::release();
@@ -106,7 +277,7 @@ bool AbsActivity::preventAutoSleep() {
 
 void AbsActivity::showView(const View next) {
   view = next;
-  if (view == View::Books) downloaded = AbsLocal::listDownloaded();
+  if (view == View::List) downloaded = AbsLocal::listDownloaded();
   updateRequired = true;
 }
 
@@ -116,9 +287,7 @@ void AbsActivity::startWork(const char* text, std::function<void(std::string& er
   if (network == Network::Required && !AbsWifi::connected()) {
     // Wi-Fi is down (or dropped since): ask for it, then do this.
     if (wifiHeld.exchange(false)) AbsWifi::release();
-    pending = {text, std::move(work), nextView};
-    hasPending = true;
-    requestWifi();
+    requestWifi([this, label = std::string(text), work, nextView] { startWork(label.c_str(), work, nextView); });
     return;
   }
   wifiNeeded = false;
@@ -151,16 +320,23 @@ void AbsActivity::startWork(const char* text, std::function<void(std::string& er
   }
 }
 
-void AbsActivity::requestWifi() {
+void AbsActivity::requestWifi(std::function<void()> then) {
+  pending = std::move(then);
   enterNewActivity(new WifiSelectionActivity(renderer, mappedInput, [this](const bool connected) {
     exitActivity();
     AbsWifi::prepare();  // the picker may have saved a network
     if (connected) {
       AbsWifi::adopt();
-      if (hasPending) {
-        PendingWork next = std::move(pending);
-        hasPending = false;
-        startWork(next.text.c_str(), std::move(next.work), next.nextView);
+      offline = false;
+      // The screen keeps the connection until it is left (onExit releases it). Otherwise work
+      // that holds it only while it runs (a refresh) would turn Wi-Fi off when done, and the
+      // next book opened would ask for Wi-Fi again.
+      std::string ignored;
+      if (!wifiHeld && AbsWifi::acquire(ignored)) wifiHeld = true;
+      if (pending) {
+        const std::function<void()> next = std::move(pending);
+        pending = nullptr;
+        next();
       }
     } else {
       AbsWifi::offIfUnused();
@@ -174,21 +350,13 @@ void AbsActivity::requestWifi() {
 }
 
 void AbsActivity::loadLibraries() {
-  startWork(
-      "Loading libraries...", [this](std::string& failure) { Abs::libraries(libraries, failure); }, View::Libraries);
+  startWork("Loading libraries...", [this](std::string& failure) { Abs::libraries(libraries, failure); }, View::More);
 }
 
 void AbsActivity::loadHome() {
   startWork(
       "Loading...", [this](std::string& failure) { Abs::shelves(library.id, SHELF_BOOKS, shelves, failure); },
       View::Home);
-}
-
-void AbsActivity::loadBooks() {
-  startWork(
-      "Loading books...",
-      [this](std::string& failure) { Abs::items(library.id, page, booksPerPage(), books, total, failure); },
-      View::Books);
 }
 
 void AbsActivity::loadDetail(const std::string& itemId) {
@@ -220,7 +388,11 @@ void AbsActivity::editField(const char* title, std::string& field, const bool se
       }));
 }
 
-int AbsActivity::booksPerPage() const { return std::max(1, (renderer.getScreenHeight() - 300) / BOOK_ROW_HEIGHT); }
+/** Rows of a paged list view under the header, above the pager buttons. */
+int AbsActivity::rowsPerPage(const int rowHeight) const {
+  const int pagerY = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
+  return std::max(1, (pagerY - contentTop - 30) / rowHeight);  // 30: room for the status line
+}
 
 void AbsActivity::loop() {
   if (subActivity) {
@@ -232,13 +404,23 @@ void AbsActivity::loop() {
   if (resultReady.exchange(false)) {
     // The worker finished: views that need SD state get it here, on the main loop.
     if (view == View::Detail) refreshLocalState();
-    if (view == View::Libraries && error.empty() && libraries.size() == 1) {
-      library = libraries.front();
-      loadHome();
+    if (view == View::More && error.empty() && !libraries.empty()) {
+      AbsLibrary::saveLibraries(libraries);
+      if (libraries.size() == 1) {
+        library = libraries.front();
+        lastLibraryId = library.id;
+        loadHome();
+      }
     }
-    if (view == View::Books) downloaded = AbsLocal::listDownloaded();
+    if (view == View::Home && error.empty()) {
+      // First visit: the shelves came from the server; the index follows in the background.
+      AbsLibrary::saveShelves(library.id, shelves);
+      if (index.empty()) AbsLibrary::loadIndex(library.id, index);
+      startRefresh(false);
+    }
     updateRequired = true;
   }
+  if (refreshReady.exchange(false)) applyRefresh();
 
   const auto close = [this] {
     if (busy) return;
@@ -246,7 +428,7 @@ void AbsActivity::loop() {
       // Give up on the work that wanted Wi-Fi and go back to the view it started from; on entry
       // (signed in, nothing loaded yet) there is none, so leave.
       wifiNeeded = false;
-      hasPending = false;
+      pending = nullptr;
       error.clear();
       if (view == View::SignIn && Abs::signedIn()) {
         onClose();
@@ -262,18 +444,22 @@ void AbsActivity::loop() {
         showView(View::Detail);
         return;
       case View::Detail:
-        if (detailFrom == View::Home) {
-          loadHome();  // again: Continue Listening may have changed while the book was open
-        } else {
-          showView(View::Books);
-        }
+        showView(detailFrom);
+        // Continue Listening may have changed while the book was open.
+        if (detailFrom == View::Home) startRefresh(false);
         return;
-      case View::Books:
+      case View::List:
+        showView(listKind == ListKind::Author ? View::Authors : View::Home);
+        return;
+      case View::Authors:
         showView(View::Home);
         return;
-      case View::Home:
-        if (libraries.size() > 1) {
-          showView(View::Libraries);
+      case View::Letters:
+        showView(View::List);
+        return;
+      case View::More:
+        if (!library.id.empty()) {
+          showView(View::Home);
           return;
         }
         break;
@@ -299,7 +485,7 @@ void AbsActivity::loop() {
       }
     }
   }
-  if (!busy && view == View::Books) {
+  if (!busy && (view == View::List || view == View::Authors)) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Up)) run(Action::PageUp, 0);
     if (mappedInput.wasPressed(MappedInputManager::Button::Down)) run(Action::PageDown, 0);
   }
@@ -331,7 +517,7 @@ void AbsActivity::run(const Action action, const int index) {
           [this, s, u, p](std::string& failure) {
             if (Abs::signIn(s, u, p, failure)) Abs::libraries(libraries, failure);
           },
-          View::Libraries);
+          View::More);
       password.clear();
       return;
     }
@@ -344,52 +530,108 @@ void AbsActivity::run(const Action action, const int index) {
       }));
       return;
     case Action::RetryWifi:
-      requestWifi();
+      requestWifi(pending);
       return;
     case Action::SignOut:
-      // Tells the server when it can; signing out here works offline too.
+      // Tells the server when it can; signing out here works offline too. Forgets the cache.
+      AbsLibrary::clear();
+      this->index.clear();
+      shelves.clear();
+      libraries.clear();
+      library = Abs::Library{};
+      lastLibraryId.clear();
+      indexFetchedFor.clear();
       startWork("Signing out...", [](std::string&) { Abs::signOut(); }, View::SignIn, Network::BestEffort);
       return;
     case Action::OpenLibrary:
       if (index >= 0 && index < static_cast<int>(libraries.size())) {
         library = libraries[index];
-        loadHome();
+        lastLibraryId = library.id;
+        shelves.clear();
+        this->index.clear();
+        const bool cached = AbsLibrary::loadShelves(library.id, shelves);
+        AbsLibrary::loadIndex(library.id, this->index);
+        if (cached) {
+          showView(View::Home);
+          startRefresh(false);
+        } else {
+          loadHome();
+        }
       }
       return;
     case Action::OpenBook:
-      if (index >= 0 && index < static_cast<int>(books.size())) {
-        detailFrom = View::Books;
-        loadDetail(books[index].id);
+      if (index >= 0 && index < static_cast<int>(listBooks.size())) {
+        openBook(std::string(this->index.text(this->index.book(listBooks[index]).id)), View::List);
       }
       return;
     case Action::OpenShelfBook: {
       const size_t shelf = static_cast<size_t>(index / SHELF_INDEX);
       const size_t row = static_cast<size_t>(index % SHELF_INDEX);
-      if (shelf < shelves.size() && row < shelves[shelf].items.size()) {
-        detailFrom = View::Home;
-        loadDetail(shelves[shelf].items[row].id);
-      }
+      if (shelf < shelves.size() && row < shelves[shelf].items.size())
+        openBook(shelves[shelf].items[row].id, View::Home);
       return;
     }
-    case Action::AllBooks:
-      page = 0;
-      loadBooks();
+    case Action::ShowAz:
+      openList(ListKind::Az, "");
       return;
-    case Action::OpenLibraries:
-      showView(View::Libraries);
+    case Action::ShowAuthors:
+      authorsFirst = 0;
+      showView(View::Authors);
+      return;
+    case Action::OpenAuthor:
+      if (index >= 0 && index < static_cast<int>(this->index.authors().size())) {
+        openList(ListKind::Author, std::string(this->index.text(this->index.authors()[index].name)));
+      }
+      return;
+    case Action::ShowSearch:
+      enterNewActivity(new KeyboardEntryActivity(
+          renderer, mappedInput, "Search titles and authors", listKind == ListKind::Search ? listKey : "", 10, 64,
+          false,
+          [this](const std::string& text) {
+            exitActivity();
+            if (text.empty()) {
+              updateRequired = true;
+            } else {
+              openList(ListKind::Search, text);
+            }
+          },
+          [this] {
+            exitActivity();
+            updateRequired = true;
+          }));
+      return;
+    case Action::ShowLetters:
+      showView(View::Letters);
+      return;
+    case Action::PickLetter:
+      listFirst = static_cast<int>(this->index.firstAt(static_cast<char>(index)));
+      showView(View::List);
+      return;
+    case Action::ShowMore:
+      showView(View::More);
+      return;
+    case Action::Refresh:
+      if (AbsWifi::connected()) {
+        startRefresh(true);
+      } else {
+        requestWifi([this] { startRefresh(true); });
+      }
       return;
     case Action::PageUp:
-      if (page > 0) {
-        --page;
-        loadBooks();
+    case Action::PageDown: {
+      const bool down = action == Action::PageDown;
+      if (view == View::Authors) {
+        const int rows = rowsPerPage(ROW_HEIGHT);
+        const int count = static_cast<int>(this->index.authors().size());
+        authorsFirst = std::max(0, std::min(authorsFirst + (down ? rows : -rows), std::max(0, count - 1)));
+      } else {
+        const int rows = rowsPerPage(BOOK_ROW_HEIGHT);
+        const int count = static_cast<int>(listBooks.size());
+        listFirst = std::max(0, std::min(listFirst + (down ? rows : -rows), std::max(0, count - 1)));
       }
+      updateRequired = true;
       return;
-    case Action::PageDown:
-      if ((page + 1) * booksPerPage() < total) {
-        ++page;
-        loadBooks();
-      }
-      return;
+    }
     case Action::Stream:
       if (AudioPlayer::openRemote(detail)) onPlay();
       return;
@@ -462,10 +704,39 @@ void AbsActivity::render() {
   missingCovers.clear();
   renderedCovers = AbsCovers::changeCounter();
   renderer.clearScreen();
-  const char* titles[] = {"Audiobookshelf", "Libraries", "Books", "Book", "Download", "Audiobookshelf"};
-  const bool named = (view == View::Books || view == View::Home) && !library.name.empty() && libraries.size() > 1;
-  const char* title = named ? library.name.c_str() : titles[static_cast<int>(view)];
-  const int top = SubPage::header(renderer, title) + 16;
+  std::string title;
+  switch (view) {
+    case View::List:
+      title = listKind == ListKind::Az ? "A-Z" : (listKind == ListKind::Author ? listKey : "\"" + listKey + "\"");
+      break;
+    case View::Detail:
+      title = "Book";
+      break;
+    case View::Download:
+      title = "Download";
+      break;
+    case View::Authors:
+      title = "Authors";
+      break;
+    case View::Letters:
+      title = "Jump to";
+      break;
+    case View::Home:
+      title = libraries.size() > 1 && !library.name.empty() ? library.name : "Audiobookshelf";
+      break;
+    default:
+      title = "Audiobookshelf";
+      break;
+  }
+  int top = SubPage::header(renderer, title.c_str()) + 16;
+  contentTop = top;
+  // Where the shown data stands: from the card while offline, or being refreshed.
+  const bool browsing = view == View::Home || view == View::List || view == View::Authors || view == View::More;
+  if (!busy && browsing && (offline || refreshing)) {
+    constexpr int noteFont = MONTSERRAT_10_FONT_ID;
+    renderer.text.render(noteFont, MARGIN, top - 8, offline ? "Offline: showing the saved library." : "Updating...");
+    top += renderer.text.getLineHeight(noteFont);
+  }
   const int font = systemFontId();
   const int width = renderer.getScreenWidth();
 
@@ -515,11 +786,17 @@ void AbsActivity::render() {
       case View::SignIn:
         renderSignIn(y);
         break;
-      case View::Libraries:
-        renderLibraries(y);
+      case View::More:
+        renderMore(y);
         break;
-      case View::Books:
-        renderBooks(y);
+      case View::List:
+        renderList(y);
+        break;
+      case View::Authors:
+        renderAuthors(y);
+        break;
+      case View::Letters:
+        renderLetters(y);
         break;
       case View::Home:
         renderHome(y);
@@ -564,60 +841,132 @@ void AbsActivity::renderSignIn(int y) {
   }
 }
 
-void AbsActivity::renderLibraries(int y) {
-  const int width = renderer.getScreenWidth();
-  const int font = systemFontId();
-  if (libraries.empty()) {
-    renderer.text.render(font, MARGIN, y, "No audiobook libraries on this server.");
-    y += renderer.text.getLineHeight(font) + 2 * GAP;
-  }
-  for (size_t i = 0; i < libraries.size(); ++i) {
-    renderer.text.render(font, MARGIN, y + (ROW_HEIGHT - renderer.text.getLineHeight(font)) / 2,
-                         renderer.text.truncate(font, libraries[i].name.c_str(), width - 2 * MARGIN).c_str());
-    row(y, ROW_HEIGHT, Action::OpenLibrary, static_cast<int>(i));
-    y += ROW_HEIGHT;
-  }
-  y += 2 * GAP;
-  button(MARGIN, y, width - 2 * MARGIN, BUTTON_HEIGHT, "Sign out", Action::SignOut);
-}
-
-void AbsActivity::renderBooks(int y) {
+void AbsActivity::renderMore(int y) {
   const int width = renderer.getScreenWidth();
   const int inner = width - 2 * MARGIN;
   const int font = systemFontId();
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
-  if (books.empty()) renderer.text.render(font, MARGIN, y, "No books.");
-  for (size_t i = 0; i < books.size(); ++i) {
-    const Abs::ItemSummary& b = books[i];
+  if (!refreshError.empty() && !refreshing) {
+    const std::string note = "Not updated: " + refreshError;
+    renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, note.c_str(), inner).c_str());
+    y += renderer.text.getLineHeight(smallFont) + GAP;
+  }
+  if (!index.empty()) {
+    const std::string count = std::to_string(index.size()) + " books in the saved library.";
+    renderer.text.render(smallFont, MARGIN, y, count.c_str());
+    y += renderer.text.getLineHeight(smallFont) + GAP;
+  }
+  if (libraries.empty()) {
+    renderer.text.render(font, MARGIN, y, "No audiobook libraries on this server.");
+    y += renderer.text.getLineHeight(font) + 2 * GAP;
+  }
+  if (libraries.size() > 1 || library.id.empty()) {
+    for (size_t i = 0; i < libraries.size(); ++i) {
+      const bool current = libraries[i].id == library.id;
+      const std::string label = (current ? "> " : "") + libraries[i].name;
+      renderer.text.render(font, MARGIN, y + (ROW_HEIGHT - renderer.text.getLineHeight(font)) / 2,
+                           renderer.text.truncate(font, label.c_str(), inner).c_str(), true,
+                           current ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+      row(y, ROW_HEIGHT, Action::OpenLibrary, static_cast<int>(i));
+      y += ROW_HEIGHT;
+    }
+    y += 2 * GAP;
+  }
+  const int half = (inner - GAP) / 2;
+  button(MARGIN, y, half, BUTTON_HEIGHT, refreshing ? "Updating..." : "Refresh", Action::Refresh);
+  button(MARGIN + half + GAP, y, inner - half - GAP, BUTTON_HEIGHT, "Sign out", Action::SignOut);
+}
+
+void AbsActivity::pager(const int y, const bool previous, const bool next, const bool jump) {
+  const int inner = renderer.getScreenWidth() - 2 * MARGIN;
+  const int third = (inner - 2 * GAP) / 3;
+  if (previous) button(MARGIN, y, third, BUTTON_HEIGHT, "Previous", Action::PageUp);
+  if (jump) button(MARGIN + third + GAP, y, third, BUTTON_HEIGHT, "Jump", Action::ShowLetters);
+  if (next) button(MARGIN + 2 * (third + GAP), y, third, BUTTON_HEIGHT, "Next", Action::PageDown);
+}
+
+void AbsActivity::renderList(int y) {
+  const int width = renderer.getScreenWidth();
+  const int inner = width - 2 * MARGIN;
+  const int font = systemFontId();
+  constexpr int smallFont = MONTSERRAT_10_FONT_ID;
+  if (listBooks.empty()) {
+    const char* message = !index.empty() ? "No books."
+                          : refreshing   ? "Loading the library..."
+                          : offline      ? "The library is not saved yet: connect once to load it."
+                                         : "The library is not loaded yet.";
+    renderer.text.render(font, MARGIN, y, message);
+  }
+  const int rows = rowsPerPage(BOOK_ROW_HEIGHT);
+  const int count = static_cast<int>(listBooks.size());
+  for (int i = listFirst; i < count && i < listFirst + rows; ++i) {
+    const AbsIndex::Book& b = index.book(listBooks[i]);
+    const std::string id(index.text(b.id));
     const int cover = BOOK_ROW_HEIGHT - 2 * ROW_COVER_INSET;
-    drawCover(b.id, MARGIN, y + ROW_COVER_INSET, cover);
+    drawCover(id, MARGIN, y + ROW_COVER_INSET, cover);
     const int textX = MARGIN + cover + GAP;
     const int textW = inner - cover - GAP;
-    renderer.text.render(font, textX, y + 10, renderer.text.truncate(font, b.title.c_str(), textW).c_str(), true,
+    renderer.text.render(font, textX, y + 10,
+                         renderer.text.truncate(font, std::string(index.text(b.title)).c_str(), textW).c_str(), true,
                          EpdFontFamily::BOLD);
-    std::string info = b.author.empty() ? "" : b.author + "  -  ";
-    info += formatDuration(b.durationSec);
+    // Progress first, so a long author name truncates instead of it.
+    std::string info;
     if (b.finished) {
-      info += "  -  finished";
-    } else if (b.progress > 0.0f) {
-      info += "  -  " + std::to_string(static_cast<int>(b.progress * 100)) + "%";
+      info = "Finished  -  ";
+    } else if (b.progress > 0) {
+      info = std::to_string(b.progress / 10) + "%  -  ";
     }
+    const std::string_view author = index.text(b.author);
+    if (!author.empty()) info += std::string(author) + "  -  ";
+    info += formatDuration(b.durationSec);
     const auto local =
-        std::find_if(downloaded.begin(), downloaded.end(), [&b](const auto& entry) { return entry.first == b.id; });
+        std::find_if(downloaded.begin(), downloaded.end(), [&id](const auto& entry) { return entry.first == id; });
     if (local != downloaded.end()) info += local->second ? "  -  on device" : "  -  partly downloaded";
     renderer.text.render(smallFont, textX, y + 16 + renderer.text.getLineHeight(font),
                          renderer.text.truncate(smallFont, info.c_str(), textW).c_str());
-    row(y, BOOK_ROW_HEIGHT, Action::OpenBook, static_cast<int>(i));
+    row(y, BOOK_ROW_HEIGHT, Action::OpenBook, i);
     y += BOOK_ROW_HEIGHT;
   }
-  const int pagerY = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
-  const int third = (inner - 2 * GAP) / 3;
-  if (page > 0) button(MARGIN, pagerY, third, BUTTON_HEIGHT, "Previous", Action::PageUp);
-  if ((page + 1) * booksPerPage() < total) {
-    button(MARGIN + third + GAP, pagerY, third, BUTTON_HEIGHT, "Next", Action::PageDown);
+  pager(renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP, listFirst > 0, listFirst + rows < count,
+        listKind == ListKind::Az && count > rows);
+}
+
+void AbsActivity::renderAuthors(int y) {
+  const int width = renderer.getScreenWidth();
+  const int inner = width - 2 * MARGIN;
+  const int font = systemFontId();
+  constexpr int smallFont = MONTSERRAT_10_FONT_ID;
+  const auto& authors = index.authors();
+  if (authors.empty()) {
+    renderer.text.render(font, MARGIN, y, refreshing ? "Loading the library..." : "No authors.");
   }
-  if (libraries.size() <= 1)
-    button(MARGIN + 2 * (third + GAP), pagerY, third, BUTTON_HEIGHT, "Sign out", Action::SignOut);
+  const int rows = rowsPerPage(ROW_HEIGHT);
+  const int count = static_cast<int>(authors.size());
+  for (int i = authorsFirst; i < count && i < authorsFirst + rows; ++i) {
+    const std::string books = std::to_string(authors[i].count) + (authors[i].count == 1 ? " book" : " books");
+    const int booksW = renderer.text.getWidth(smallFont, books.c_str());
+    renderer.text.render(
+        font, MARGIN, y + (ROW_HEIGHT - renderer.text.getLineHeight(font)) / 2,
+        renderer.text.truncate(font, std::string(index.text(authors[i].name)).c_str(), inner - booksW - GAP).c_str());
+    renderer.text.render(smallFont, MARGIN + inner - booksW,
+                         y + (ROW_HEIGHT - renderer.text.getLineHeight(smallFont)) / 2, books.c_str());
+    row(y, ROW_HEIGHT, Action::OpenAuthor, i);
+    y += ROW_HEIGHT;
+  }
+  pager(renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP, authorsFirst > 0, authorsFirst + rows < count, false);
+}
+
+void AbsActivity::renderLetters(int y) {
+  // # (digits and the rest) and A-Z, seven to a row; a letter without titles goes to the next.
+  const int inner = renderer.getScreenWidth() - 2 * MARGIN;
+  constexpr int COLUMNS = 7;
+  const int cell = (inner - (COLUMNS - 1) * GAP) / COLUMNS;
+  const char letters[] = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  for (int i = 0; letters[i]; ++i) {
+    const char label[2] = {letters[i], '\0'};
+    button(MARGIN + (i % COLUMNS) * (cell + GAP), y + (i / COLUMNS) * (BUTTON_HEIGHT + GAP), cell, BUTTON_HEIGHT, label,
+           Action::PickLetter, letters[i]);
+  }
 }
 
 void AbsActivity::renderHome(int y) {
@@ -665,12 +1014,18 @@ void AbsActivity::renderHome(int y) {
     y += GAP;
   }
 
-  const int half = (inner - GAP) / 2;
-  button(MARGIN, buttonsY, half, BUTTON_HEIGHT, "All books", Action::AllBooks, 0, true);
-  if (libraries.size() > 1) {
-    button(MARGIN + half + GAP, buttonsY, inner - half - GAP, BUTTON_HEIGHT, "Libraries", Action::OpenLibraries);
-  } else {
-    button(MARGIN + half + GAP, buttonsY, inner - half - GAP, BUTTON_HEIGHT, "Sign out", Action::SignOut);
+  // Browse the cached library; More holds libraries, refresh and sign out.
+  const int quarter = (inner - 3 * GAP) / 4;
+  const struct {
+    const char* label;
+    Action action;
+  } buttons[] = {{"A-Z", Action::ShowAz},
+                 {"Authors", Action::ShowAuthors},
+                 {"Search", Action::ShowSearch},
+                 {"More", Action::ShowMore}};
+  for (int i = 0; i < 4; ++i) {
+    button(MARGIN + i * (quarter + GAP), buttonsY, quarter, BUTTON_HEIGHT, buttons[i].label, buttons[i].action, 0,
+           i == 0);
   }
 }
 

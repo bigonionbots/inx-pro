@@ -205,9 +205,22 @@ mbedTLS error and free internal RAM.
 
 **Home.** Signed in, the screen opens on the library's shelves, as the server's home page has
 them (`GET /api/libraries/:id/personalized`): Continue Listening, Continue Series, Recently Added,
-Listen Again, a few books each with the listening progress. **All books** is the full list by
-title; with more than one library, **Libraries** switches. Back from a book opened on a shelf
-reloads them, so Continue Listening is current.
+Listen Again, a few books each with the listening progress. Under them:
+- **A-Z**: every book by title (ignoring a leading The/A/An, as the server sorts), paged, with
+  **Jump** to a letter;
+- **Authors**: by surname, a book under each of its authors, then that author's books;
+- **Search**: books whose title or author contains every word typed;
+- **More**: switch library, **Refresh**, sign out.
+
+**Offline first.** The libraries, the shelves and the whole library index are cached on the card
+(`AbsLibrary`: `/.system/cache/abs/`), so the screen appears at once and A-Z, Authors and Search
+work with Wi-Fi off; "Offline: showing the saved library" says so, and downloaded books open from
+their `.abs.json`. With Wi-Fi up, entering the screen refreshes the shelves in the background
+(the index too, at most every 10 minutes, or on Refresh), shown as "Updating..."; the screen
+stays usable and swaps the new data in when it arrives. Only a first visit waits on "Loading".
+The index (`AbsIndex`) keeps every string in one PSRAM pool, so a large library costs no internal
+RAM; its page fetches parse JSON with a PSRAM allocator for the same reason.
+`test/gb_host/abs_index_test.cpp` checks its order, authors, search and file format.
 
 **Covers.** Shelf and list rows show each book's cover, its page a larger one. A cover is fetched
 once, as a 240 px wide JPEG the server scales (`/api/items/:id/cover?width=240&format=jpeg`), and

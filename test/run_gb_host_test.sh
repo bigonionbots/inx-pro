@@ -123,3 +123,8 @@ PY
 else
   echo "MP4 chapter tests skipped: ffmpeg is needed to make the test files"
 fi
+
+# The cached Audiobookshelf library (src/abs/AbsIndex.cpp): order, authors, search, file format.
+c++ -std=c++20 -O2 -Wall -Wextra -I"$ROOT_DIR/src" -I"$ROOT_DIR/lib/Epub" "$ROOT_DIR/test/gb_host/abs_index_test.cpp" \
+  "$ROOT_DIR/src/abs/AbsIndex.cpp" -o "$BUILD_DIR/abs_index_test"
+"$BUILD_DIR/abs_index_test"

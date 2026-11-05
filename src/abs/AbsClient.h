@@ -23,6 +23,8 @@
 
 #include "audio/AudioChapter.h"
 
+class AbsIndex;
+
 namespace Abs {
 
 struct Library {
@@ -100,6 +102,11 @@ bool items(const std::string& libraryId, int page, int perPage, std::vector<Item
  */
 bool shelves(const std::string& libraryId, int perShelf, std::vector<Shelf>& out, std::string& error);
 bool item(const std::string& itemId, ItemDetail& out, std::string& error);
+/**
+ * The whole library into `out` (finished), with the user's progress: the items list page by page
+ * (GET /api/libraries/:id/items, minified) and /api/me. Any task; no SD.
+ */
+bool libraryIndex(const std::string& libraryId, AbsIndex& out, std::string& error);
 bool progress(const std::string& itemId, Progress& out, std::string& error);
 bool updateProgress(const std::string& itemId, uint32_t currentMs, uint32_t durationMs, bool finished,
                     std::string& error);
