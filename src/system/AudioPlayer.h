@@ -53,6 +53,14 @@ struct View {
   int trackCount = 0;
   uint32_t positionMs = 0;  ///< within the track
   uint32_t durationMs = 0;  ///< of the track, 0 if unknown
+  /** Chapters (Audiobookshelf's, or those in an .m4b): -1 when the book has none. */
+  int chapter = -1;  ///< 0-based
+  int chapterCount = 0;
+  std::string chapterTitle;
+  uint32_t chapterPositionMs = 0;
+  uint32_t chapterDurationMs = 0;  ///< 0 if unknown
+  uint32_t bookPositionMs = 0;     ///< in the whole book
+  uint32_t bookDurationMs = 0;     ///< 0 if unknown
   audiolink::PlayState moduleState = audiolink::PlayState::Idle;
   audiolink::BtState btState = audiolink::BtState::Off;
   audiolink::Output output = audiolink::Output::Bluetooth;
@@ -75,6 +83,12 @@ void togglePause();
 void skip(int32_t deltaMs);
 void nextTrack();
 void previousTrack();
+/** Chapters (no-ops for a book without them). Previous restarts the chapter if it is a few seconds in. */
+void nextChapter();
+void previousChapter();
+void seekChapter(int index);
+/** The open book's chapters, times from its start. */
+std::vector<AudioChapter> chapters();
 void setVolume(uint8_t percent);
 void selectOutput(audiolink::Output output);
 

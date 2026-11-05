@@ -30,6 +30,7 @@ struct BookMeta {
   uint32_t durationMs = 0;
   bool complete = false;
   std::vector<Abs::Track> tracks;  ///< in play order; filename is the local file in folder
+  std::vector<Abs::Chapter> chapters;  ///< the server's, in the whole book (empty in older downloads)
 };
 
 bool read(const std::string& folder, BookMeta& out);

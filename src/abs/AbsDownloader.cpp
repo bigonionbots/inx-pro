@@ -304,6 +304,7 @@ bool start(const Abs::ItemDetail& item, std::string& error) {
     track.filename = AbsLocal::localName(track);
     meta.tracks.push_back(track);
   }
+  meta.chapters = item.chapters;
   if (!AbsLocal::write(meta)) {
     error = "Cannot write to the SD card";
     return false;

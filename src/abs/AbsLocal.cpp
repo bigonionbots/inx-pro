@@ -66,6 +66,7 @@ bool read(const std::string& folder, BookMeta& out) {
     track.durationMs = t["durationMs"] | 0u;
     out.tracks.push_back(track);
   }
+  for (JsonObject c : doc["chapters"].as<JsonArray>()) out.chapters.push_back({c["startMs"] | 0u, c["title"] | ""});
   return !out.itemId.empty() && !out.tracks.empty();
 }
 
@@ -85,6 +86,12 @@ bool write(const BookMeta& meta) {
     t["size"] = track.sizeBytes;
     t["startMs"] = track.startOffsetMs;
     t["durationMs"] = track.durationMs;
+  }
+  JsonArray chapters = doc["chapters"].to<JsonArray>();
+  for (const Abs::Chapter& chapter : meta.chapters) {
+    JsonObject c = chapters.add<JsonObject>();
+    c["startMs"] = chapter.startMs;
+    c["title"] = chapter.title;
   }
   std::string text;
   serializeJsonPretty(doc, text);

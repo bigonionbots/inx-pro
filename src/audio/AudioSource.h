@@ -17,7 +17,9 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
+#include "AudioChapter.h"
 #include "AudioFile.h"
 
 class AudioSource {
@@ -33,6 +35,11 @@ class AudioSource {
   /** Up to max bytes of the codec stream; 0 at the end of the file or on a read error. */
   virtual size_t read(uint8_t* out, size_t max) = 0;
   virtual bool atEnd() const = 0;
+  /** Chapters stored in the file (times from its start), in order; empty when it has none. */
+  virtual const std::vector<AudioChapter>& chapters() const {
+    static const std::vector<AudioChapter> none;
+    return none;
+  }
   /** Why open() failed, for the player's message line. */
   const std::string& error() const { return error_; }
 

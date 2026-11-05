@@ -264,6 +264,115 @@ void Mp4Source::parseTitle(const Box& moov) {
   }
 }
 
+namespace {
+constexpr size_t MAX_CHAPTERS = 1000;
+constexpr size_t MAX_CHAPTER_TITLE = 200;
+}  // namespace
+
+// Nero chapters (moov/udta/chpl): version u8, flags u24, [u32 when version 1], count u8, then per
+// chapter a start in 100 ns units (u64) and a length-prefixed (u8) UTF-8 title. As ffmpeg reads it.
+void Mp4Source::parseNeroChapters(const Box& moov) {
+  Box udta, chpl;
+  if (!findChild(moov.payload, moov.end, "udta", udta) || !findChild(udta.payload, udta.end, "chpl", chpl)) return;
+  uint8_t head[9];
+  if (!file_->seekSet(chpl.payload) || file_->read(head, 9) != 9) return;
+  const bool v1 = head[0] != 0;
+  const uint8_t count = v1 ? head[8] : head[4];
+  uint64_t at = chpl.payload + (v1 ? 9 : 5);
+  std::vector<AudioChapter> found;
+  for (unsigned i = 0; i < count && at + 9 <= chpl.end; ++i) {
+    uint8_t entry[9];
+    if (!file_->seekSet(at) || file_->read(entry, 9) != 9) return;
+    const uint64_t start100ns = be64(entry);
+    const size_t length = entry[8];
+    std::string title(length, '\0');
+    if (length > 0 && file_->read(&title[0], length) != static_cast<int>(length)) return;
+    found.push_back({static_cast<uint32_t>(start100ns / 10000), title});
+    at += 9 + length;
+  }
+  if (!found.empty()) chapters_ = std::move(found);
+}
+
+// A QuickTime chapter track: a text track; each sample is u16 length + UTF-8 title, its time from
+// stts. Only the first chunk offset and the sizes are needed when (as tools write it) the samples
+// sit back to back; stsc is honoured anyway.
+void Mp4Source::parseChapterTrack(const Box& trak) {
+  Box mdia, hdlr, mdhd, minf, stbl, stts, stsz, stsc, stco;
+  if (!findChild(trak.payload, trak.end, "mdia", mdia) || !findChild(mdia.payload, mdia.end, "hdlr", hdlr)) return;
+  uint8_t handler[12];
+  if (!file_->seekSet(hdlr.payload) || file_->read(handler, 12) != 12) return;
+  if (std::memcmp(handler + 8, "text", 4) != 0 && std::memcmp(handler + 8, "sbtl", 4) != 0) return;
+  if (!findChild(mdia.payload, mdia.end, "mdhd", mdhd)) return;
+  uint8_t header[32];
+  if (!file_->seekSet(mdhd.payload) || file_->read(header, 32) != 32) return;
+  const uint32_t timescale = header[0] == 1 ? be32(header + 20) : be32(header + 12);
+  if (timescale == 0 || !findChild(mdia.payload, mdia.end, "minf", minf) ||
+      !findChild(minf.payload, minf.end, "stbl", stbl) || !findChild(stbl.payload, stbl.end, "stts", stts) ||
+      !findChild(stbl.payload, stbl.end, "stsz", stsz) || !findChild(stbl.payload, stbl.end, "stsc", stsc)) {
+    return;
+  }
+  const bool co64 = !findChild(stbl.payload, stbl.end, "stco", stco);
+  if (co64 && !findChild(stbl.payload, stbl.end, "co64", stco)) return;
+
+  uint32_t fixedSize = 0;
+  uint32_t samples = 0;
+  if (!readU32(stsz.payload + 4, fixedSize) || !readU32(stsz.payload + 8, samples)) return;
+  samples = std::min<uint32_t>(samples, MAX_CHAPTERS);
+  // Start times from stts.
+  std::vector<uint64_t> starts;
+  uint32_t entries = 0;
+  if (!readU32(stts.payload + 4, entries)) return;
+  uint64_t time = 0;
+  for (uint32_t e = 0; e < entries && starts.size() < samples; ++e) {
+    uint8_t b[8];
+    if (!file_->seekSet(stts.payload + 8 + 8ull * e) || file_->read(b, 8) != 8) return;
+    for (uint32_t n = 0; n < be32(b) && starts.size() < samples; ++n) {
+      starts.push_back(time);
+      time += be32(b + 4);
+    }
+  }
+  // Sample offsets: chunks from stco/co64, samples per chunk from stsc.
+  uint32_t chunkCount = 0, stscCount = 0;
+  if (!readU32(stco.payload + 4, chunkCount) || !readU32(stsc.payload + 4, stscCount) || stscCount == 0) return;
+  std::vector<AudioChapter> found;
+  uint32_t sample = 0;
+  for (uint32_t chunk = 0; chunk < chunkCount && sample < starts.size(); ++chunk) {
+    uint64_t offset = 0;
+    if (co64) {
+      uint8_t b[8];
+      if (!file_->seekSet(stco.payload + 8 + 8ull * chunk) || file_->read(b, 8) != 8) return;
+      offset = be64(b);
+    } else {
+      uint32_t o = 0;
+      if (!readU32(stco.payload + 8 + 4ull * chunk, o)) return;
+      offset = o;
+    }
+    // Samples in this chunk: the last stsc entry whose first chunk (1-based) is at or before it.
+    uint32_t perChunk = 1;
+    for (uint32_t s = 0; s < stscCount; ++s) {
+      uint32_t first = 0, n = 0;
+      if (!readU32(stsc.payload + 8 + 12ull * s, first) || !readU32(stsc.payload + 12 + 12ull * s, n)) return;
+      if (first > chunk + 1) break;
+      perChunk = n;
+    }
+    for (uint32_t k = 0; k < perChunk && sample < starts.size(); ++k, ++sample) {
+      uint32_t size = fixedSize;
+      if (size == 0 && !readU32(stsz.payload + 12 + 4ull * sample, size)) return;
+      uint8_t lengthBytes[2];
+      std::string title;
+      if (size >= 2 && file_->seekSet(offset) && file_->read(lengthBytes, 2) == 2) {
+        const size_t length = std::min<size_t>({static_cast<size_t>(lengthBytes[0] << 8 | lengthBytes[1]),
+                                                static_cast<size_t>(size - 2), MAX_CHAPTER_TITLE});
+        title.assign(length, '\0');
+        if (length > 0 && file_->read(&title[0], length) != static_cast<int>(length)) title.clear();
+      }
+      found.push_back({static_cast<uint32_t>(starts[sample] * 1000 / timescale), title});
+      offset += size;
+    }
+  }
+  if (!found.empty()) chapters_ = std::move(found);
+}
+
 bool Mp4Source::open(std::unique_ptr<AudioFile> file) {
   file_ = std::move(file);
   if (!file_) {
@@ -292,6 +401,12 @@ bool Mp4Source::open(std::unique_ptr<AudioFile> file) {
     return false;
   }
   parseTitle(moov);
+  // Chapters: a QuickTime chapter track, else (or when it has none) Nero chpl.
+  for (uint64_t from = moov.payload; findChild(from, moov.end, "trak", trak); from = trak.end) {
+    parseChapterTrack(trak);
+    if (!chapters_.empty()) break;
+  }
+  if (chapters_.empty()) parseNeroChapters(moov);
   pending_.resize(MAX_FRAME_BYTES + ADTS_HEADER);
   positionAt(0);
   return true;

@@ -73,3 +73,50 @@ python3 "$ROOT_DIR/test/gb_host/overlay_png_test.py" "$BUILD_DIR/overlay_png_dum
 c++ -std=c++20 -O2 -Wall -Wextra -I"$ROOT_DIR/shared/audio_link" "$ROOT_DIR/test/gb_host/live_audio_test.cpp" \
   -o "$BUILD_DIR/live_audio_test"
 "$BUILD_DIR/live_audio_test" "$BUILD_DIR/ucity.wav"
+
+# Audiobook chapters in MP4 (src/audio/Mp4Source.cpp), from files ffmpeg makes: a QuickTime
+# chapter track (.m4b), and Nero chpl alone (the same file with its chapter track's handler
+# renamed, so the reader falls back to chpl). Needs ffmpeg.
+if command -v ffmpeg >/dev/null; then
+  CH="$BUILD_DIR/chapters"
+  mkdir -p "$CH"
+  cat > "$CH/meta.txt" <<'META'
+;FFMETADATA1
+title=Chapter Test
+[CHAPTER]
+TIMEBASE=1/1000
+START=0
+END=4000
+title=Opening Credits
+[CHAPTER]
+TIMEBASE=1/1000
+START=4000
+END=9500
+title=Chapter 1: The Beginning
+[CHAPTER]
+TIMEBASE=1/1000
+START=9500
+END=15000
+title=Chapter 2 - Ünïcödé
+META
+  ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=440:duration=15" -i "$CH/meta.txt" -map_metadata 1 \
+    -map_chapters 1 -c:a aac -b:a 32k -f ipod "$CH/qt.m4b"
+  python3 - "$CH/qt.m4b" "$CH/nero.m4b" <<'PY'
+import sys
+d = bytearray(open(sys.argv[1], "rb").read())
+i = d.find(b"hdlr")
+while i != -1:
+    if d[i + 12:i + 16] == b"text":
+        d[i + 12:i + 16] = b"none"
+    i = d.find(b"hdlr", i + 4)
+open(sys.argv[2], "wb").write(d)
+PY
+  c++ -std=c++20 -O2 -Wall -Wextra -DINX_HAS_AUDIO_MODULE=1 -I"$ROOT_DIR/shared/audio_link" -I"$ROOT_DIR/src" \
+    "$ROOT_DIR/test/gb_host/mp4_chapters_test.cpp" "$ROOT_DIR/src/audio/Mp4Source.cpp" -o "$BUILD_DIR/mp4_chapters_test"
+  for f in qt.m4b nero.m4b; do
+    "$BUILD_DIR/mp4_chapters_test" "$CH/$f" 3 0 "Opening Credits" 4000 "Chapter 1: The Beginning" \
+      9500 "Chapter 2 - Ünïcödé"
+  done
+else
+  echo "MP4 chapter tests skipped: ffmpeg is needed to make the test files"
+fi

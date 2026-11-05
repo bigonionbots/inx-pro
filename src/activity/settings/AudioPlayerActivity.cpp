@@ -150,11 +150,17 @@ void AudioPlayerActivity::loop() {
     return;
   }
   if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
-    run(view == View::Books ? Action::BooksPageUp : Action::VolumeUp, 0);
+    run(view == View::Books      ? Action::BooksPageUp
+        : view == View::Chapters ? Action::ChaptersPageUp
+                                 : Action::VolumeUp,
+        0);
     return;
   }
   if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
-    run(view == View::Books ? Action::BooksPageDown : Action::VolumeDown, 0);
+    run(view == View::Books      ? Action::BooksPageDown
+        : view == View::Chapters ? Action::ChaptersPageDown
+                                 : Action::VolumeDown,
+        0);
     return;
   }
 
@@ -173,9 +179,9 @@ void AudioPlayerActivity::loop() {
 std::string AudioPlayerActivity::stateKey() const {
   const AudioPlayer::View v = AudioPlayer::view();
   char key[160];
-  snprintf(key, sizeof(key), "%d%d%d%d|%u|%u|%u|%u|%d|%zu|%s", v.open, v.paused, v.finished, v.waitingForModule,
+  snprintf(key, sizeof(key), "%d%d%d%d|%u|%u|%u|%u|%d|%d|%zu|%s", v.open, v.paused, v.finished, v.waitingForModule,
            static_cast<unsigned>(v.moduleState), static_cast<unsigned>(v.btState), static_cast<unsigned>(v.output),
-           v.volume, v.track, view == View::Output ? AudioLink::btDevices().size() : 0, v.message.c_str());
+           v.volume, v.track, v.chapter, view == View::Output ? AudioLink::btDevices().size() : 0, v.message.c_str());
   return key;
 }
 
@@ -201,6 +207,29 @@ void AudioPlayerActivity::run(const Action action, const int index) {
     case Action::NextTrack:
       AudioPlayer::nextTrack();
       break;
+    case Action::PreviousChapter:
+      AudioPlayer::previousChapter();
+      break;
+    case Action::NextChapter:
+      AudioPlayer::nextChapter();
+      break;
+    case Action::ShowChapters:
+      chapterList = AudioPlayer::chapters();
+      // Open on the page with the chapter playing.
+      chaptersFirst = v.chapter >= 0 ? v.chapter / listRows() * listRows() : 0;
+      showView(View::Chapters);
+      return;
+    case Action::OpenChapter:
+      AudioPlayer::seekChapter(index);
+      showView(View::NowPlaying);
+      return;
+    case Action::ChaptersPageUp:
+    case Action::ChaptersPageDown: {
+      const int rows = listRows();
+      chaptersFirst += action == Action::ChaptersPageDown ? rows : -rows;
+      chaptersFirst = std::max(0, std::min(chaptersFirst, std::max(0, static_cast<int>(chapterList.size()) - 1)));
+      break;
+    }
     case Action::VolumeDown:
       AudioPlayer::setVolume(static_cast<uint8_t>(std::max(0, v.volume - VOLUME_STEP)));
       break;
@@ -279,8 +308,12 @@ void AudioPlayerActivity::button(const int x, const int y, const int w, const in
 void AudioPlayerActivity::render() {
   targets.clear();
   renderer.clearScreen();
-  const char* title = view == View::Books ? "Audiobooks" : (view == View::Output ? "Audio Output" : "Now Playing");
+  const char* title = view == View::Books      ? "Audiobooks"
+                      : view == View::Output   ? "Audio Output"
+                      : view == View::Chapters ? "Chapters"
+                                               : "Now Playing";
   const int top = SubPage::header(renderer, title) + 16;
+  contentTop = top;
   switch (view) {
     case View::NowPlaying:
       renderNowPlaying(top);
@@ -290,6 +323,9 @@ void AudioPlayerActivity::render() {
       break;
     case View::Output:
       renderOutput(top);
+      break;
+    case View::Chapters:
+      renderChapters(top);
       break;
   }
   renderer.displayBuffer();
@@ -319,30 +355,48 @@ void AudioPlayerActivity::renderNowPlaying(int y) {
   renderer.text.render(titleFont, MARGIN, y, title.c_str(), true, EpdFontFamily::BOLD);
   y += renderer.text.getLineHeight(titleFont) + GAP;
 
-  if (v.trackCount > 1) {
+  // With chapters, the time and bar are the chapter's and the buttons step through chapters;
+  // without, the track's (a folder's files).
+  const bool chaptered = v.chapter >= 0;
+  if (chaptered) {
+    char line[200];
+    snprintf(line, sizeof(line), "Chapter %d of %d%s%s", v.chapter + 1, v.chapterCount,
+             v.chapterTitle.empty() ? "" : ": ", v.chapterTitle.c_str());
+    renderer.text.render(font, MARGIN, y, renderer.text.truncate(font, line, inner).c_str(), true, EpdFontFamily::BOLD);
+    y += renderer.text.getLineHeight(font) + GAP;
+  } else if (v.trackCount > 1) {
     char line[160];
     snprintf(line, sizeof(line), "Track %d of %d: %s", v.track + 1, v.trackCount, v.trackName.c_str());
     renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, line, inner).c_str());
     y += renderer.text.getLineHeight(smallFont) + GAP;
   }
 
+  const uint32_t shownPosition = chaptered ? v.chapterPositionMs : v.positionMs;
+  const uint32_t shownDuration = chaptered ? v.chapterDurationMs : v.durationMs;
   const std::string times =
-      formatTime(v.positionMs) + (v.durationMs ? " / " + formatTime(v.durationMs) : std::string());
+      formatTime(shownPosition) + (shownDuration ? " / " + formatTime(shownDuration) : std::string());
   renderer.text.render(font, MARGIN, y, times.c_str());
   y += renderer.text.getLineHeight(font) + GAP;
   renderer.rectangle.render(MARGIN, y, inner, 14, true);
-  if (v.durationMs) {
+  if (shownDuration) {
     const int filled =
-        static_cast<int>(static_cast<uint64_t>(inner - 4) * std::min(v.positionMs, v.durationMs) / v.durationMs);
+        static_cast<int>(static_cast<uint64_t>(inner - 4) * std::min(shownPosition, shownDuration) / shownDuration);
     if (filled > 0) renderer.rectangle.fill(MARGIN + 2, y + 2, filled, 10, true);
   }
-  y += 14 + 2 * GAP;
+  y += 14 + GAP;
+  if (chaptered && v.bookDurationMs) {
+    const std::string book = "Book: " + formatTime(v.bookPositionMs) + " / " + formatTime(v.bookDurationMs) + "  (" +
+                             std::to_string(static_cast<int>(100ull * v.bookPositionMs / v.bookDurationMs)) + "%)";
+    renderer.text.render(smallFont, MARGIN, y, book.c_str());
+    y += renderer.text.getLineHeight(smallFont);
+  }
+  y += GAP;
 
   // Transport
   const int buttonW = (inner - 4 * GAP) / 5;
   const char* playLabel = v.finished ? "Again" : (v.paused ? "Play" : "Pause");
-  const Action actions[5] = {Action::PreviousTrack, Action::Back30, Action::PlayPause, Action::Forward30,
-                             Action::NextTrack};
+  const Action actions[5] = {chaptered ? Action::PreviousChapter : Action::PreviousTrack, Action::Back30,
+                             Action::PlayPause, Action::Forward30, chaptered ? Action::NextChapter : Action::NextTrack};
   const char* labels[5] = {"|<", "-30s", playLabel, "+30s", ">|"};
   for (int i = 0; i < 5; ++i) {
     button(MARGIN + i * (buttonW + GAP), y, buttonW, BUTTON_HEIGHT, labels[i], actions[i], 0, i == 2);
@@ -368,13 +422,59 @@ void AudioPlayerActivity::renderNowPlaying(int y) {
   }
   button(MARGIN, y, inner, BUTTON_HEIGHT, output, Action::ShowOutput);
   y += BUTTON_HEIGHT + GAP;
-  button(MARGIN, y, inner, BUTTON_HEIGHT, "Books", Action::ShowBooks);
+  if (chaptered) {
+    const int half = (inner - GAP) / 2;
+    button(MARGIN, y, half, BUTTON_HEIGHT, "Chapters", Action::ShowChapters);
+    button(MARGIN + half + GAP, y, inner - half - GAP, BUTTON_HEIGHT, "Books", Action::ShowBooks);
+  } else {
+    button(MARGIN, y, inner, BUTTON_HEIGHT, "Books", Action::ShowBooks);
+  }
   y += BUTTON_HEIGHT + 2 * GAP;
 
   renderer.text.render(font, MARGIN, y, moduleStateName(v));
   y += renderer.text.getLineHeight(font) + GAP;
   if (!v.message.empty()) {
     renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, v.message.c_str(), inner).c_str());
+  }
+}
+
+/** Rows of a list view (Chapters): the same count paging and rendering use. */
+int AudioPlayerActivity::listRows() const {
+  const int pagerTop = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
+  return std::max(1, (pagerTop - contentTop) / ROW_HEIGHT);
+}
+
+void AudioPlayerActivity::renderChapters(int y) {
+  const int width = renderer.getScreenWidth();
+  const int inner = width - 2 * MARGIN;
+  const int font = systemFontId();
+  constexpr int smallFont = MONTSERRAT_10_FONT_ID;
+  const AudioPlayer::View v = AudioPlayer::view();
+  const int pagerTop = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
+  const int rows = listRows();
+  const int count = static_cast<int>(chapterList.size());
+  for (int i = 0; i < rows && chaptersFirst + i < count; ++i) {
+    const int c = chaptersFirst + i;
+    const AudioChapter& chapter = chapterList[c];
+    const int rowY = y + i * ROW_HEIGHT;
+    const bool current = c == v.chapter;
+    // Start time on the right; the title gets the rest of the row.
+    const std::string start = formatTime(chapter.startMs);
+    const int startW = renderer.text.getWidth(smallFont, start.c_str());
+    std::string label =
+        (current ? "> " : "") + (chapter.title.empty() ? "Chapter " + std::to_string(c + 1) : chapter.title);
+    label = renderer.text.truncate(font, label.c_str(), inner - startW - GAP);
+    renderer.text.render(font, MARGIN, rowY + (ROW_HEIGHT - renderer.text.getLineHeight(font)) / 2, label.c_str(), true,
+                         current ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    renderer.text.render(smallFont, MARGIN + inner - startW,
+                         rowY + (ROW_HEIGHT - renderer.text.getLineHeight(smallFont)) / 2, start.c_str());
+    renderer.line.render(0, rowY + ROW_HEIGHT - 1, width, rowY + ROW_HEIGHT - 1, true, LineRender::Style::Dotted);
+    targets.push_back({0, rowY, width, ROW_HEIGHT, Action::OpenChapter, c});
+  }
+  const int pagerW = (inner - GAP) / 2;
+  if (chaptersFirst > 0) button(MARGIN, pagerTop, pagerW, BUTTON_HEIGHT, "Previous", Action::ChaptersPageUp);
+  if (chaptersFirst + rows < count) {
+    button(MARGIN + pagerW + GAP, pagerTop, pagerW, BUTTON_HEIGHT, "Next", Action::ChaptersPageDown);
   }
 }
 

@@ -8,6 +8,9 @@
  * are read from the card on demand through small caches, because a long audiobook has millions of
  * frames. HE-AAC (SBR/PS) is sent as its AAC-LC core in the ADTS header; the module's decoder picks
  * up the SBR data from the bitstream.
+ *
+ * Chapters come from either place audiobook tools put them: a Nero `chpl` box in moov/udta, or a
+ * QuickTime chapter track (a text track whose samples are the chapter names).
  */
 
 #if INX_HAS_AUDIO_MODULE
@@ -27,6 +30,7 @@ class Mp4Source final : public AudioSource {
 
   /** ©nam from the iTunes metadata, empty if absent. */
   const std::string& title() const { return title_; }
+  const std::vector<AudioChapter>& chapters() const override { return chapters_; }
 
  private:
   struct Box {
@@ -52,6 +56,8 @@ class Mp4Source final : public AudioSource {
   bool parseEsds(const Box& esds);
   bool parseAudioSpecificConfig(const uint8_t* data, size_t length);
   void parseTitle(const Box& moov);
+  void parseNeroChapters(const Box& moov);
+  void parseChapterTrack(const Box& trak);
 
   uint32_t sampleSize(uint32_t sample);
   uint64_t chunkOffset(uint32_t chunk);
@@ -62,6 +68,7 @@ class Mp4Source final : public AudioSource {
   std::unique_ptr<AudioFile> file_;
   uint64_t fileSize_ = 0;
   std::string title_;
+  std::vector<AudioChapter> chapters_;
 
   // Track
   uint32_t timescale_ = 0;

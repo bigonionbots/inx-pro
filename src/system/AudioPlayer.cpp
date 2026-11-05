@@ -425,6 +425,7 @@ bool remote = false;
 Book book;
 std::string progressKey;
 std::vector<TrackInfo> tracks;
+std::vector<AudioChapter> bookChapters;  // in the whole book; empty when the book has none
 int track = 0;
 std::unique_ptr<AudioSource> source;  // SD tracks only; streamed tracks live on the feeder task
 uint32_t trackDurationMs = 0;
@@ -640,6 +641,11 @@ bool openTrack(const int index) {
     return false;
   }
   trackDurationMs = next->durationMs() ? next->durationMs() : info.durationMs;
+  // A local book's offsets and durations are known only once its files are opened.
+  if (tracks[index].durationMs == 0) tracks[index].durationMs = trackDurationMs;
+  // A single .m4b has its chapters inside: used unless the server's are known (downloads made
+  // before chapters were saved have none, and the file's are the same ones).
+  if (tracks.size() == 1 && bookChapters.empty()) bookChapters = next->chapters();
   source = std::move(next);
   return true;
 }
@@ -675,7 +681,22 @@ void startStream(uint32_t ms) {
   sendControl(paused ? Type::Pause : Type::Resume);
 }
 
-/** Jumps to a position in the whole book (Audiobookshelf books, whose tracks carry offsets). */
+/** The chapter playing at ms in the book, -1 before the first (or without chapters). */
+int chapterAt(const uint32_t ms) {
+  int found = -1;
+  for (int i = 0; i < static_cast<int>(bookChapters.size()); ++i) {
+    if (bookChapters[i].startMs <= ms) found = i;
+  }
+  return found;
+}
+
+/** Where chapter c ends: the next one's start, or the end of the book (0 if unknown). */
+uint32_t chapterEndMs(const int c) {
+  if (c + 1 < static_cast<int>(bookChapters.size())) return bookChapters[c + 1].startMs;
+  return bookDurationMs();
+}
+
+/** Jumps to a position in the whole book (tracks with offsets: Audiobookshelf books, single files). */
 void seekBook(const uint32_t ms) {
   int target = 0;
   for (int i = 0; i < static_cast<int>(tracks.size()); ++i) {
@@ -893,6 +914,7 @@ bool open(const Book& next) {
   book = next;
   remote = false;
   tracks.clear();
+  bookChapters.clear();
   AbsLocal::BookMeta meta;
   if (next.folder && AbsLocal::read(next.path, meta) && meta.complete) {
     // Downloaded from Audiobookshelf: the server's track order and offsets, and progress sync.
@@ -900,6 +922,7 @@ bool open(const Book& next) {
     std::transform(meta.tracks.begin(), meta.tracks.end(), std::back_inserter(tracks), [&next](const Abs::Track& t) {
       return TrackInfo{next.path + "/" + t.filename, "", t.filename, t.startOffsetMs, t.durationMs};
     });
+    bookChapters = meta.chapters;
   } else {
     book.absItemId.clear();
     std::vector<std::string> files;
@@ -930,6 +953,7 @@ bool openRemote(const Abs::ItemDetail& item) {
   std::transform(item.tracks.begin(), item.tracks.end(), std::back_inserter(tracks), [](const Abs::Track& t) {
     return TrackInfo{"", t.contentUrl, t.filename, t.startOffsetMs, t.durationMs};
   });
+  bookChapters = item.chapters;
   if (tracks.empty()) {
     message = "No audio tracks";
     return false;
@@ -997,6 +1021,38 @@ void previousTrack() {
   requestPush();
 }
 
+void seekChapter(const int index) {
+  if (!isOpen || index < 0 || index >= static_cast<int>(bookChapters.size())) return;
+  if (finished) {
+    finished = false;
+    paused = false;
+    sendControl(Type::Resume);
+  }
+  seekBook(bookChapters[index].startMs);
+  saveProgress();
+  requestPush();
+}
+
+void nextChapter() {
+  if (!isOpen || bookChapters.empty()) return;
+  seekChapter(chapterAt(bookMs()) + 1);
+}
+
+void previousChapter() {
+  if (!isOpen || bookChapters.empty()) return;
+  const uint32_t now = bookMs();
+  const int c = chapterAt(now);
+  if (c < 0) {
+    seekBook(0);
+  } else if (now - bookChapters[c].startMs > PREVIOUS_RESTARTS_TRACK_MS || c == 0) {
+    seekChapter(c);  // into the chapter: back to its start
+  } else {
+    seekChapter(c - 1);
+  }
+}
+
+std::vector<AudioChapter> chapters() { return bookChapters; }
+
 void setVolume(const uint8_t percent) {
   const uint8_t value = std::min<uint8_t>(percent, 100);
   sendControl(Type::SetVolume, &value, 1);
@@ -1030,6 +1086,18 @@ View view() {
   v.trackCount = static_cast<int>(tracks.size());
   v.positionMs = positionMs;
   v.durationMs = trackDurationMs;
+  v.bookPositionMs = isOpen ? bookMs() : 0;
+  v.bookDurationMs = isOpen ? bookDurationMs() : 0;
+  if (isOpen && !bookChapters.empty()) {
+    const uint32_t now = bookMs();
+    const int c = std::max(0, chapterAt(now));
+    v.chapter = c;
+    v.chapterCount = static_cast<int>(bookChapters.size());
+    v.chapterTitle = bookChapters[c].title;
+    v.chapterPositionMs = now > bookChapters[c].startMs ? now - bookChapters[c].startMs : 0;
+    const uint32_t end = chapterEndMs(c);
+    v.chapterDurationMs = end > bookChapters[c].startMs ? end - bookChapters[c].startMs : 0;
+  }
   v.queuedBytes = static_cast<uint32_t>(queue.usedBytes());
   v.message = message;
   const AudioLink::ModuleStatus module = AudioLink::status();

@@ -18,6 +18,7 @@
  * Audiobook player screen (Home -> Shortcuts -> Audiobooks). Three views:
  * - Now playing: transport, volume and output; playback keeps going after the screen closes.
  * - Books: the books under /Audiobooks, plus the way into Audiobookshelf (AbsActivity).
+ * - Chapters: the open book's chapters, to jump to one (books with chapters only).
  * - Output: Bluetooth headphones (scan, connect, forget), the wired DAC, or the silent test sink.
  *
  * Confirm toggles play/pause and Up/Down change the volume; everything else is touch. While a
@@ -35,7 +36,7 @@ class AudioPlayerActivity final : public Activity {
   bool preventAutoSleep() override { return AudioPlayer::keepAwake(); }
 
  private:
-  enum class View : uint8_t { NowPlaying, Books, Output };
+  enum class View : uint8_t { NowPlaying, Books, Output, Chapters };
 
   enum class Action : uint8_t {
     None,
@@ -44,6 +45,12 @@ class AudioPlayerActivity final : public Activity {
     Forward30,
     PreviousTrack,
     NextTrack,
+    PreviousChapter,
+    NextChapter,
+    ShowChapters,
+    OpenChapter,
+    ChaptersPageUp,
+    ChaptersPageDown,
     VolumeDown,
     VolumeUp,
     ShowBooks,
@@ -70,6 +77,9 @@ class AudioPlayerActivity final : public Activity {
   View view = View::NowPlaying;
   std::vector<AudioPlayer::Book> books;
   int booksFirst = 0;
+  std::vector<AudioChapter> chapterList;  ///< while the Chapters view is open
+  int chaptersFirst = 0;
+  int contentTop = 120;  ///< where views start under the header, from the last render
   bool scanning = false;
   std::vector<Target> targets;
   bool updateRequired = false;
@@ -83,6 +93,8 @@ class AudioPlayerActivity final : public Activity {
   void renderNowPlaying(int top);
   void renderBooks(int top);
   void renderOutput(int top);
+  void renderChapters(int top);
+  int listRows() const;
   void button(int x, int y, int w, int h, const char* label, Action action, int index = 0, bool filled = false);
   std::string stateKey() const;
 };

@@ -122,6 +122,14 @@ progress is in `/.system/audio_progress.txt`.
   while a book plays. Pause, then sleep, and the module powers off.
 - Confirm toggles play/pause and Up/Down change the volume.
 
+**Chapters.** A book with chapters shows "Chapter 3 of 24: title" on Now Playing, with the time and
+bar for the chapter, the position in the whole book under it, and |< / >| stepping by chapter
+(|< restarts the chapter when it is more than 5 s in). **Chapters** lists them to jump to one.
+They come from the server for Audiobookshelf books (`media.chapters`, also saved in a download's
+`.abs.json`), or from the file for a single `.m4b`: a QuickTime chapter track, else Nero `chpl`
+(`Mp4Source`; `test/gb_host/mp4_chapters_test.cpp` checks both on files ffmpeg makes). Books
+without chapters (a folder of MP3s) step by file as before.
+
 **Pieces:**
 
 | Where | What |
@@ -253,6 +261,4 @@ For a downloaded book with Wi-Fi off, a push turns Wi-Fi on briefly (`AbsWifi`) 
 
 ## Next stages
 
-- Chapters for M4B (Nero `chpl` or QuickTime chapter track), shown and skippable on the player.
 - A player entry outside Device Management: Home widget, or a library action on audio files.
-- Audiobookshelf chapters: the API returns them (`media.chapters`), but the player does not show them yet.

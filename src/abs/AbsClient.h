@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+#include "audio/AudioChapter.h"
+
 namespace Abs {
 
 struct Library {
@@ -54,10 +56,7 @@ struct Track {
   uint32_t durationMs = 0;
 };
 
-struct Chapter {
-  uint32_t startMs = 0;
-  std::string title;
-};
+using Chapter = AudioChapter;
 
 struct ItemDetail {
   std::string id;
