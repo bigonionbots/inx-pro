@@ -150,8 +150,11 @@ bool perform(const esp_http_client_method_t method, const std::string& url, cons
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, body.data(), static_cast<int>(body.size()));
   }
-  const esp_err_t err = esp_http_client_perform(client);
+  esp_err_t err = esp_http_client_perform(client);
   response.status = esp_http_client_get_status_code(client);
+  // ESP-IDF 5 answers a 401 whose WWW-Authenticate is not Basic/Digest (Audiobookshelf's bearer
+  // tokens) with ESP_ERR_NOT_SUPPORTED, not ESP_OK: it is a reply, so api() can refresh the token.
+  if (err == ESP_ERR_NOT_SUPPORTED && response.status == 401) err = ESP_OK;
   int mbedtlsCode = 0;
   int certFlags = 0;
   const esp_err_t tlsErr =

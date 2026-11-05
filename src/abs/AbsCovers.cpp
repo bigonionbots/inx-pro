@@ -85,11 +85,20 @@ void fetch(esp_http_client_handle_t client, const char* id) {
     const std::string url =
         Abs::url("/api/items/" + std::string(id) + "/cover?width=" + std::to_string(COVER_WIDTH) + "&format=jpeg");
     esp_http_client_set_url(client, url.c_str());
-    const std::string authorization = Abs::authorization();
-    esp_http_client_set_header(client, "Authorization", authorization.c_str());
     esp_http_client_set_user_data(client, &body);
-    const esp_err_t err = esp_http_client_perform(client);
-    const int status = esp_http_client_get_status_code(client);
+    esp_err_t err = ESP_OK;
+    int status = 0;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      const std::string authorization = Abs::authorization();
+      esp_http_client_set_header(client, "Authorization", authorization.c_str());
+      body.length = 0;
+      body.overflow = false;
+      err = esp_http_client_perform(client);
+      status = esp_http_client_get_status_code(client);
+      // A 401 comes back as ESP_ERR_NOT_SUPPORTED from ESP-IDF 5 (see AbsClient's perform()).
+      if (err == ESP_ERR_NOT_SUPPORTED && status == 401) err = ESP_OK;
+      if (!(err == ESP_OK && status == 401 && attempt == 0 && Abs::refreshAccess())) break;
+    }
     if (err == ESP_OK && status == 200 && !body.overflow && body.length > 0) {
       result.data = body.data;
       result.length = body.length;
