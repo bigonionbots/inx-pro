@@ -215,7 +215,12 @@ Network errors are retried. If retries fail, playback restarts from the current 
 **Downloads.** A book goes into `/Audiobooks/<title>/`, together with `.abs.json` (item id,
 server track order, per-track offsets, `complete`). An incomplete download is hidden from the
 local list. The download runs only while its screen is open:
-- the network task fills 64 KB PSRAM buffers;
+- each track is one streaming request from where the card's copy ends (`Range: bytes=N-`), so
+  a download pays one TLS handshake per track; it reconnects from where it stopped when the
+  connection drops (up to 5 times in a row without progress). Fetching it in 128 KB ranges, as
+  streaming playback does to seek, cost a handshake per range and ran at ~50 KB/s through a
+  Cloudflare tunnel;
+- the network task (one long-lived task, stack in PSRAM) fills 64 KB PSRAM buffers;
 - the main loop writes them to the card, because SD access from other tasks races the reader;
 - leaving the screen pauses it, and Resume continues from the bytes already on the card.
 

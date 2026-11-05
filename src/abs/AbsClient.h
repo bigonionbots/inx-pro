@@ -97,6 +97,12 @@ bool updateProgress(const std::string& itemId, uint32_t currentMs, uint32_t dura
 std::string url(const std::string& path);
 /** "Bearer <access token>" for requests made outside this client (HttpAudioFile). */
 std::string authorization();
+/**
+ * Why a request could not reach `url`, for the screen: from esp_http_client's error and esp-tls's
+ * last error (esp_http_client_get_and_clear_last_tls_error: its result, the mbedTLS code and the
+ * certificate flags). Names the cause when it can (name not found, unreachable, certificate).
+ */
+std::string describeConnectFailure(int err, int tlsErr, int mbedtlsCode, int certFlags, const std::string& url);
 /** Renews the access token after a 401. Network; any task. */
 bool refreshAccess();
 

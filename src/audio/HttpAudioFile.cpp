@@ -71,9 +71,25 @@ bool HttpAudioFile::fetchOnce(const uint64_t start, const size_t length, Block& 
 
   bool ok = false;
   status = 0;
-  if (esp_http_client_open(client, 0) == ESP_OK) {
+  const auto describe = [&](const esp_err_t err) {
+    int mbedtlsCode = 0;
+    int certFlags = 0;
+    const esp_err_t tlsErr = esp_http_client_get_and_clear_last_tls_error(client, &mbedtlsCode, &certFlags);
+    lastError_ = Abs::describeConnectFailure(err, tlsErr, mbedtlsCode, certFlags, url_);
+    INX_SERIAL.printf("[HTTPAUDIO] %s\n", lastError_.c_str());
+  };
+  const esp_err_t opened = esp_http_client_open(client, 0);
+  if (opened == ESP_OK) {
     const int64_t contentLength = esp_http_client_fetch_headers(client);
     status = esp_http_client_get_status_code(client);
+    if (contentLength < 0 && status <= 0) {
+      // Connected, but no response came back (the "HTTP -1" this used to report).
+      describe(ESP_FAIL);
+      lastError_ = "No response from the server: " + lastError_;
+      esp_http_client_close(client);
+      esp_http_client_cleanup(client);
+      return false;
+    }
     // 206 is the normal answer. A server that ignores Range sends 200 and the whole file, which is
     // only usable for the first block.
     if (status == 206 || (status == 200 && start == 0)) {
@@ -99,7 +115,7 @@ bool HttpAudioFile::fetchOnce(const uint64_t start, const size_t length, Block& 
       lastError_ = "HTTP " + std::to_string(status);
     }
   } else {
-    lastError_ = "cannot connect";
+    describe(opened);
   }
   esp_http_client_close(client);
   esp_http_client_cleanup(client);

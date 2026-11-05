@@ -271,6 +271,11 @@ void saveSettings() {
 
 }  // namespace
 
+std::string describeConnectFailure(const int err, const int tlsErr, const int mbedtlsCode, const int certFlags,
+                                   const std::string& url) {
+  return connectError(err, tlsErr, mbedtlsCode, certFlags, url);
+}
+
 /**
  * mbedTLS's allocations, PSRAM first. The prebuilt framework allocates them in internal RAM
  * (CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC), and an HTTPS handshake needs a 16 KB record buffer plus
