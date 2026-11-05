@@ -49,6 +49,13 @@ constexpr uint32_t CONTROL_TIMEOUT_MS = 300;
 constexpr uint32_t PREVIOUS_RESTARTS_TRACK_MS = 5000;
 constexpr uint32_t STREAM_RETRY_MS = 5000;
 constexpr uint32_t REMOTE_PUSH_INTERVAL_MS = 60000;
+/**
+ * A streamed book paused this long lets go of Wi-Fi (the stream stops; the position is kept), so a
+ * forgotten pause does not keep the radio on. Play reconnects and restarts the stream there.
+ */
+constexpr uint32_t PAUSED_WIFI_OFF_MS = 3 * 60 * 1000;
+constexpr const char* WIFI_PARKED_MESSAGE = "Wi-Fi off while paused";
+constexpr const char* WIFI_RECONNECTING_MESSAGE = "Reconnecting Wi-Fi...";
 constexpr uint32_t SYNC_TOLERANCE_MS = 2000;
 constexpr const char* ABS_KEY_PREFIX = "abs:";
 
@@ -429,6 +436,8 @@ std::string progressKey;
 std::vector<TrackInfo> tracks;
 std::vector<AudioChapter> bookChapters;  // in the whole book; empty when the book has none
 std::string coverPath;                   // see View::coverPath
+uint32_t pausedAtMs = 0;                 // when the current pause began
+bool wifiParked = false;                 // streamed book paused long enough to stop the stream
 int track = 0;
 std::unique_ptr<AudioSource> source;  // SD tracks only; streamed tracks live on the feeder task
 uint32_t trackDurationMs = 0;
@@ -732,6 +741,12 @@ bool openTrack(const int index) {
 void startStream(uint32_t ms) {
   stopStream();
   if (!remote && !source) return;
+  if (wifiParked) {
+    // Any restart (play, a seek, a chapter) ends the Wi-Fi pause; only playing waits on Wi-Fi.
+    wifiParked = false;
+    message = paused ? "" : WIFI_RECONNECTING_MESSAGE;
+  }
+  if (paused) pausedAtMs = millis();  // a seek while paused starts the wait again
   if (trackDurationMs && ms >= trackDurationMs) ms = trackDurationMs > 1000 ? trackDurationMs - 1000 : 0;
   streamId = static_cast<uint8_t>(streamId + 1);
   finished = false;
@@ -855,6 +870,7 @@ void updateFromModule() {
   if (state == PlayState::Idle) return;
   positionMs = streamStartMs + module.status.playedMs;
   if (trackDurationMs && positionMs > trackDurationMs) positionMs = trackDurationMs;
+  if (state == PlayState::Playing && message == WIFI_RECONNECTING_MESSAGE) message.clear();  // back
   if (state == PlayState::Finished && endQueued) finishTrack();
 }
 
@@ -988,6 +1004,7 @@ std::vector<Book> listBooks() {
 
 bool open(const Book& next) {
   stop();
+  wifiParked = false;
   message.clear();
   book = next;
   remote = false;
@@ -1034,6 +1051,7 @@ bool open(const Book& next) {
 
 bool openRemote(const Abs::ItemDetail& item) {
   stop();
+  wifiParked = false;
   message.clear();
   book = Book{};
   book.title = item.title;
@@ -1075,8 +1093,14 @@ void togglePause() {
     return;
   }
   paused = !paused;
+  if (!paused && wifiParked) {
+    // The stream was stopped to let Wi-Fi go: start it again where it was.
+    startStream(positionMs);
+    return;
+  }
   sendControl(paused ? Type::Pause : Type::Resume);
   if (paused) {
+    pausedAtMs = millis();
     saveProgress();
     requestPush();
   }
@@ -1214,7 +1238,16 @@ void service() {
   if (now != session && AudioLink::ready()) {
     // New session: the module (re)connected or rebooted and knows nothing of our stream.
     session = now;
-    if (!finished) startStream(positionMs);
+    if (!finished && !wifiParked) startStream(positionMs);
+  }
+  if (remote && paused && streamActive && !wifiParked && millis() - pausedAtMs >= PAUSED_WIFI_OFF_MS) {
+    // Paused a while: stop the stream, which ends the feeder's hold on Wi-Fi (off unless another
+    // user has it). The position stays; togglePause() restarts from it.
+    saveProgress();
+    stopStream();
+    wifiParked = true;
+    message = WIFI_PARKED_MESSAGE;
+    AudioModule::logf("Player: paused %lu min, Wi-Fi released", static_cast<unsigned long>(PAUSED_WIFI_OFF_MS / 60000));
   }
   if (retryStreamAtMs != 0 && static_cast<int32_t>(millis() - retryStreamAtMs) >= 0) startStream(positionMs);
 

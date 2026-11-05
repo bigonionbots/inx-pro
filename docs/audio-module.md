@@ -250,7 +250,9 @@ token unused for 30 days (the server default) means signing in again.
 the audio being played, plus the MP4 sample tables elsewhere in the file. Underneath, the same
 `Mp3Source`/`Mp4Source` readers run on a feeder task, so a streamed book needs no SD access.
 Network errors are retried. If retries fail, playback restarts from the current position after
-5 s. Wi-Fi stays on while streaming.
+5 s. Wi-Fi stays on while streaming, but a streamed book paused for 3 minutes stops its stream
+and lets Wi-Fi go ("Wi-Fi off while paused"); Play reconnects with the saved networks and
+restarts it at the same place ("Reconnecting Wi-Fi..." until it plays).
 
 **Downloads.** A book goes into `/Audiobooks/<title>/`, together with `.abs.json` (item id,
 server track order, per-track offsets, `complete`). An incomplete download is hidden from the
