@@ -22,7 +22,7 @@
 /**
  * Audiobookshelf browser (Audiobooks -> Books -> Audiobookshelf): sign in, pick a library and a
  * book, then stream it or queue it for download (AbsQueue). In a podcast library, pick a podcast,
- * then an episode, which streams.
+ * then an episode, which streams or downloads like a book.
  *
  * Offline first: the libraries, the home shelves and the whole library index (AbsIndex) are
  * cached on the card (AbsLibrary), so the screen shows them at once, browses A-Z / by author /
@@ -90,7 +90,8 @@ class AbsActivity final : public ActivityWithSubactivity {
     QueueDown,
     QueueNow,
     QueueRemove,
-    OpenEpisode,  ///< index = position in show.episodes
+    OpenEpisode,   ///< index = position in show.episodes
+    ConnectQueue,  ///< Downloads page: the Wi-Fi picker, for the queue
   };
   struct Target {
     int x, y, w, h;

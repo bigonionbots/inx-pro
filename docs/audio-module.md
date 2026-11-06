@@ -204,7 +204,9 @@ newest 100 episodes with date, length and the user's progress, newest first. An 
 addressed as `<item id>/<episode id>` everywhere (shelves, the player, the recent list, the local
 progress key `abs:<item>/<episode>`), which is also the tail of its progress routes (`GET`/`PATCH
 /api/me/progress/:id/:episodeId`), so it streams and syncs like a book of one track. Its cover is
-the podcast's. Episodes stream only: they cannot be downloaded yet.
+the podcast's. An episode downloads through the same queue as a book, into
+`/Audiobooks/<podcast> - <episode>/`, and is listed on the device under that name; the
+podcast's page marks episodes on the device, partly downloaded or queued.
 
 **Offline first.** The libraries, the shelves and the whole library index are cached on the card
 (`AbsLibrary`: `/.system/cache/abs/`), so the screen appears at once and A-Z, Authors and Search
@@ -269,8 +271,13 @@ unplugging pauses a charger-only download, which resumes from the card next time
 queue with each book's state and progress; select a book to move it **Up** / **Down**, start it
 **Now** (also on battery: it then keeps the T5 awake only while the page is open), or **Remove**
 it (which deletes what it had downloaded). A book that fails (no Wi-Fi, server down) is tried
-again after 10 minutes and does not keep the T5 awake meanwhile. The queue fetches each book's
+again after 10 minutes, or as soon as the charger is plugged in, and does not keep the T5 awake
+meanwhile. The queue fetches each book's
 details on a task of its own, holding a Wi-Fi share (saved networks) until its download ends.
+The queue connects with the saved networks by itself (it cannot open the picker from whatever
+screen is showing); when that fails, the Downloads page shows **Connect to Wi-Fi**, and **Now**
+opens the picker first when Wi-Fi is down. While the picker is open the queue starts nothing,
+so it does not fight the picker for the radio; once connected, failed books try again at once.
 
 How a book downloads:
 - each track is one streaming request from where the card's copy ends (`Range: bytes=N-`), so
@@ -278,7 +285,9 @@ How a book downloads:
   connection drops (up to 5 times in a row without progress). Fetching it in 128 KB ranges, as
   streaming playback does to seek, cost a handshake per range and ran at ~50 KB/s through a
   Cloudflare tunnel;
-- the network task (one long-lived task, stack in PSRAM) fills 64 KB PSRAM buffers;
+- the network task (one long-lived task, stack in PSRAM) fills 64 KB PSRAM buffers; both are
+  created at boot, because the task's control block needs internal RAM, which a long session can
+  run out of ("Cannot start the download: out of memory", with the free memory);
 - the main loop writes them to the card (`AbsQueue::service()` -> `AbsDownloader::service()`),
   because SD access from other tasks races the reader;
 - a paused download continues from the bytes already on the card.

@@ -88,9 +88,11 @@ bool acquire(std::string& error) {
     WiFi.disconnect(false);
     vTaskDelay(pdMS_TO_TICKS(100));
   }
+  std::string tried;
+  for (const auto& network : networks) tried += (tried.empty() ? "" : ", ") + network.first;
   WiFi.mode(WIFI_OFF);
   xSemaphoreGiveRecursive(lock);
-  error = "Wi-Fi connection failed";
+  error = "Could not join Wi-Fi (" + tried + ")";
   return false;
 }
 

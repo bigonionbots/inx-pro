@@ -1057,7 +1057,10 @@ std::vector<Book> listBooks() {
       const bool fromAbs = AbsLocal::read(path, meta);
       if (fromAbs && !meta.complete) continue;  // still downloading
       if (!listAudioFiles(path).empty()) {
-        Book found{path, fromAbs && !meta.title.empty() ? meta.title : name, true};
+        std::string title = fromAbs && !meta.title.empty() ? meta.title : name;
+        // A podcast episode: its podcast first, so episodes sort together and say what they are.
+        if (fromAbs && Abs::isEpisode(meta.itemId) && !meta.author.empty()) title = meta.author + " - " + title;
+        Book found{path, title, true};
         if (fromAbs) found.absItemId = meta.itemId;
         books.push_back(found);
       }

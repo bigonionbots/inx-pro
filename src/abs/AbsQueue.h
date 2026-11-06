@@ -70,6 +70,15 @@ void move(const std::string& itemId, int delta);
 /** To the front, allowed on battery, and (if another book is downloading) next in line. */
 void startNow(const std::string& itemId);
 
+/** Failed books try again at once (Wi-Fi is back, the charger plugged in), not in 10 minutes. */
+void retryFailed();
+
+/**
+ * While held, the queue starts nothing new (a running download carries on): the Wi-Fi picker is
+ * open, and the queue connecting with the saved networks meanwhile would fight it for the radio.
+ */
+void holdOff(bool hold);
+
 /** On a charger (external power on VBUS), as last checked. */
 bool charging();
 

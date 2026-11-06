@@ -35,6 +35,11 @@ struct Status {
   uint32_t bytesPerSecond = 0;
 };
 
+/**
+ * Allocates the buffers and creates the network task, once. Call at boot (AbsQueue::begin()),
+ * while memory is plentiful; start() tries again if that failed. Main loop.
+ */
+bool begin(std::string& error);
 /** Starts or resumes. Main loop. */
 bool start(const Abs::ItemDetail& item, std::string& error);
 /** Stops (the task ends after its current chunk); what is on the card stays. Main loop. */

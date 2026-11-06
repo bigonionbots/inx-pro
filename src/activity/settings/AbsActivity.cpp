@@ -352,7 +352,7 @@ bool AbsActivity::preventAutoSleep() {
 
 void AbsActivity::showView(const View next) {
   view = next;
-  if (view == View::List) downloaded = AbsLocal::listDownloaded();
+  if (view == View::List || view == View::Show) downloaded = AbsLocal::listDownloaded();
   updateRequired = true;
 }
 
@@ -397,14 +397,17 @@ void AbsActivity::startWork(const char* text, std::function<void(std::string& er
 
 void AbsActivity::requestWifi(std::function<void()> then) {
   pending = std::move(then);
+  AbsQueue::holdOff(true);  // the queue must not connect on its own while the picker scans
   enterNewActivity(new WifiSelectionActivity(renderer, mappedInput, [this](const bool connected) {
     // This lambda lives in the picker, which exitActivity() deletes: everything after it must
     // use locals only (reading `this` from the freed closure crashed now and then).
     AbsActivity* const self = this;
     self->exitActivity();
+    AbsQueue::holdOff(false);
     AbsWifi::prepare();  // the picker may have saved a network
     if (connected) {
       AbsWifi::adopt();
+      AbsQueue::retryFailed();  // downloads that failed for want of Wi-Fi
       self->offline = false;
       // The screen keeps the connection until it is left (onExit releases it). Otherwise work
       // that holds it only while it runs (a refresh) would turn Wi-Fi off when done, and the
@@ -483,6 +486,7 @@ void AbsActivity::loop() {
 
   if (resultReady.exchange(false)) {
     // The worker finished: views that need SD state get it here, on the main loop.
+    if (view == View::Show) downloaded = AbsLocal::listDownloaded();  // its "on device" marks
     if (view == View::Detail) {
       refreshLocalState();
       if (error.empty()) playIfAsked();
@@ -631,6 +635,9 @@ void AbsActivity::run(const Action action, const int index) {
     case Action::RetryWifi:
       requestWifi(pending);
       return;
+    case Action::ConnectQueue:
+      requestWifi([this] { updateRequired = true; });  // the callback retries failed downloads
+      return;
     case Action::SignOut:
       // Tells the server when it can; signing out here works offline too. Forgets the cache.
       AbsLibrary::clear();
@@ -755,7 +762,6 @@ void AbsActivity::run(const Action action, const int index) {
       }
       return;
     case Action::Download:
-      if (Abs::isEpisode(detail.id)) return;  // episodes stream only (for now)
       // Queued: it downloads in the background on the charger (Start now on the page for battery).
       AbsQueue::add(detail.id, detail.title, detail.author);
       downloadsFrom = View::Detail;
@@ -794,8 +800,16 @@ void AbsActivity::run(const Action action, const int index) {
         AbsQueue::move(id, 1);
         downloadSel = std::min(static_cast<int>(queued.size()) - 1, downloadSel + 1);
       } else if (action == Action::QueueNow) {
-        AbsQueue::startNow(id);
         downloadSel = 0;
+        if (!AbsWifi::connected()) {
+          // Ask for Wi-Fi first, then start it (the queue would only try the saved networks).
+          requestWifi([this, id] {
+            AbsQueue::startNow(id);
+            updateRequired = true;
+          });
+          return;
+        }
+        AbsQueue::startNow(id);
       } else {
         AbsQueue::remove(id);
         downloadSel = std::max(0, std::min(downloadSel, static_cast<int>(queued.size()) - 2));
@@ -1255,7 +1269,6 @@ void AbsActivity::renderDetail(int y) {
 
   button(MARGIN, y, inner, BUTTON_HEIGHT, "Stream over Wi-Fi", Action::Stream, 0, !localComplete);
   y += BUTTON_HEIGHT + GAP;
-  if (episode) return;  // no episode downloads yet
   if (localComplete) {
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Play from device", Action::PlayLocal, 0, true);
     y += BUTTON_HEIGHT + GAP;
@@ -1317,6 +1330,14 @@ void AbsActivity::renderShow(int y) {
     const std::string date = formatDate(e.publishedMs);
     if (!date.empty()) info += date;
     if (e.durationSec) info += (date.empty() ? "" : "  -  ") + formatDuration(e.durationSec);
+    const std::string id = show.id + "/" + e.id;
+    const auto local =
+        std::find_if(downloaded.begin(), downloaded.end(), [&id](const auto& entry) { return entry.first == id; });
+    if (local != downloaded.end()) {
+      info += local->second ? "  -  on device" : "  -  partly downloaded";
+    } else if (AbsQueue::contains(id)) {
+      info += "  -  queued";
+    }
     renderer.text.render(smallFont, MARGIN, y + 16 + renderer.text.getLineHeight(font),
                          renderer.text.truncate(smallFont, info.c_str(), inner).c_str());
     row(y, BOOK_ROW_HEIGHT, Action::OpenEpisode, i);
@@ -1340,6 +1361,15 @@ void AbsActivity::renderDownload(int y) {
   renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, power, inner).c_str(), true,
                        EpdFontFamily::BOLD);
   y += renderer.text.getLineHeight(smallFont) + GAP;
+  // The queue connects with the saved networks by itself; when that fails, connect here.
+  const bool needsWifi = !queued.empty() && !AbsWifi::connected() &&
+                         std::any_of(queued.begin(), queued.end(), [charging](const AbsQueue::Entry& e) {
+                           return e.state == AbsQueue::State::Failed || e.now || charging;
+                         });
+  if (needsWifi) {
+    button(MARGIN, y, inner, BUTTON_HEIGHT, "Connect to Wi-Fi", Action::ConnectQueue, 0, true);
+    y += BUTTON_HEIGHT + GAP;
+  }
 
   if (queued.empty()) {
     renderer.text.render(font, MARGIN, y, "No downloads queued.");

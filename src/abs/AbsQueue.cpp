@@ -44,12 +44,13 @@ std::string activeId;  // the book the downloader is on, started by the queue
 
 // Details fetch: the main loop asks (fetchId, then notifies the task), the task answers.
 TaskHandle_t fetchTask = nullptr;
-std::string fetchId;                   // main loop writes before notifying; the task reads
-std::atomic<bool> fetching{false};     // a fetch is in flight
-std::atomic<bool> fetchDone{false};    // its result is ready
-Abs::ItemDetail fetchedDetail;         // written by the task before fetchDone
-std::string fetchError;                // ditto
-std::atomic<bool> wifiHeld{false};     // the queue's share of Wi-Fi, from the fetch to the download's end
+std::string fetchId;                 // main loop writes before notifying; the task reads
+std::atomic<bool> fetching{false};   // a fetch is in flight
+std::atomic<bool> fetchDone{false};  // its result is ready
+Abs::ItemDetail fetchedDetail;       // written by the task before fetchDone
+std::string fetchError;              // ditto
+std::atomic<bool> wifiHeld{false};   // the queue's share of Wi-Fi, from the fetch to the download's end
+bool heldOff = false;                // holdOff(): start nothing new
 
 void changed() { ++changes; }
 
@@ -114,7 +115,7 @@ void markFailed(const int i, const std::string& error) {
 
 /** Starts fetching the details of the first book allowed to run now. */
 void startNext() {
-  if (!activeId.empty() || fetching || fetchDone || AbsDownloader::status().active) return;
+  if (heldOff || !activeId.empty() || fetching || fetchDone || AbsDownloader::status().active) return;
   const uint32_t now = millis();
   for (size_t i = 0; i < queue.size(); ++i) {
     Entry& e = queue[i];
@@ -124,9 +125,8 @@ void startNext() {
       e.state = State::Waiting;
     }
     if (e.state != State::Waiting) continue;
-    if (!fetchTask &&
-        xTaskCreatePinnedToCoreWithCaps(fetchMain, "abs_queue", FETCH_STACK, nullptr, 1, &fetchTask, tskNO_AFFINITY,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+    if (!fetchTask && xTaskCreatePinnedToCoreWithCaps(fetchMain, "abs_queue", FETCH_STACK, nullptr, 1, &fetchTask,
+                                                      tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
       fetchTask = nullptr;
       return;
     }
@@ -164,7 +164,19 @@ void begin() {
     }
   }
   failedAt.assign(queue.size(), 0);
+  std::string error;
+  AbsDownloader::begin(error);  // its task and buffers, now, while memory is plentiful
+  AbsWifi::prepare();           // the saved networks, for downloads before the screen is opened
 }
+
+void retryFailed() {
+  const uint32_t now = millis();
+  for (size_t i = 0; i < queue.size(); ++i) {
+    if (queue[i].state == State::Failed) failedAt[i] = now - RETRY_AFTER_MS;
+  }
+}
+
+void holdOff(const bool hold) { heldOff = hold; }
 
 void service() {
   AbsDownloader::service();  // writes downloaded buffers to the card, whatever screen is open
@@ -175,6 +187,7 @@ void service() {
     const bool was = onCharger;
     onCharger = readCharger();
     if (was != onCharger) changed();
+    if (onCharger && !was) retryFailed();  // plugged in: failed books try again now
   }
 
   // The details came back: start the download (or note why not).

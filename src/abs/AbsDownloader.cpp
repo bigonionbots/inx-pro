@@ -268,24 +268,48 @@ bool writeSlot(const Slot& slot) {
   return file.write(slot.data, slot.length) == slot.length;
 }
 
+/** Free memory, for an error that says why something could not be allocated. */
+std::string memoryNote() {
+  char text[96];
+  snprintf(text, sizeof(text), "internal %u KB free (largest %u KB), PSRAM %u KB free",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+  return text;
+}
+
 }  // namespace
+
+bool begin(std::string& error) {
+  if (!lock) lock = xSemaphoreCreateMutex();
+  if (!freeSlots) freeSlots = xQueueCreate(SLOTS, sizeof(int));
+  if (!filledSlots) filledSlots = xQueueCreate(SLOTS, sizeof(int));
+  bool ok = lock && freeSlots && filledSlots;
+  for (Slot& slot : slots) {
+    if (!slot.data)
+      slot.data = static_cast<uint8_t*>(heap_caps_malloc(CHUNK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    ok = ok && slot.data;
+  }
+  // The task's stack is in PSRAM, but its control block must be internal RAM, which a long
+  // session (streaming, the module link, TLS) can leave without even that: create it at boot.
+  if (ok && !task &&
+      xTaskCreatePinnedToCoreWithCaps(downloadTask, "abs_download", 12288, nullptr, 2, &task, tskNO_AFFINITY,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+    task = nullptr;
+    ok = false;
+  }
+  if (!ok) {
+    error = "Cannot start the download: out of memory (" + memoryNote() + ")";
+    INX_SERIAL.printf("[ABSDL] %s\n", error.c_str());
+  }
+  return ok;
+}
 
 bool start(const Abs::ItemDetail& item, std::string& error) {
   // A task told to stop finishes its current chunk first; wait for it rather than run two.
   for (int i = 0; i < 100 && taskRunning && stopRequested; ++i) vTaskDelay(pdMS_TO_TICKS(50));
   if (taskRunning) return true;
-  if (!lock) {
-    lock = xSemaphoreCreateMutex();
-    freeSlots = xQueueCreate(SLOTS, sizeof(int));
-    filledSlots = xQueueCreate(SLOTS, sizeof(int));
-    for (Slot& slot : slots) {
-      slot.data = static_cast<uint8_t*>(heap_caps_malloc(CHUNK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-      if (!slot.data) {
-        error = "Out of memory";
-        return false;
-      }
-    }
-  }
+  if (!begin(error)) return false;  // normally done at boot (AbsQueue::begin())
   xQueueReset(freeSlots);
   xQueueReset(filledSlots);
   for (int i = 0; i < SLOTS; ++i) xQueueSend(freeSlots, &i, 0);
@@ -294,7 +318,9 @@ bool start(const Abs::ItemDetail& item, std::string& error) {
   AbsLocal::BookMeta existing;
   const bool resume = AbsLocal::find(item.id, existing);
   meta = AbsLocal::BookMeta{};
-  meta.folder = resume ? existing.folder : AbsLocal::newFolder(item.title);
+  // An episode's folder carries its podcast's name, so episodes sort together under /Audiobooks.
+  const bool episode = Abs::isEpisode(item.id);
+  meta.folder = resume ? existing.folder : AbsLocal::newFolder(episode ? item.author + " - " + item.title : item.title);
   meta.itemId = item.id;
   meta.title = item.title;
   meta.author = item.author;
@@ -336,12 +362,6 @@ bool start(const Abs::ItemDetail& item, std::string& error) {
 
   stopRequested = false;
   taskFinished = false;
-  if (!task && xTaskCreatePinnedToCoreWithCaps(downloadTask, "abs_download", 12288, nullptr, 2, &task, tskNO_AFFINITY,
-                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-    task = nullptr;
-    error = "Cannot start the download (out of memory)";
-    return false;
-  }
   taskRunning = true;
   xTaskNotifyGive(task);
   return true;
