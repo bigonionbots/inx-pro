@@ -32,13 +32,17 @@
  */
 class AbsActivity final : public ActivityWithSubactivity {
  public:
-  /** With resumeItemId: opens that book and plays it (downloaded copy if any, else streamed). */
+  /**
+   * With resumeItemId: opens that book and plays it (downloaded copy if any, else streamed).
+   * With openDownloads: opens on the Downloads page (the queue).
+   */
   AbsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::function<void()> onClose,
-              std::function<void()> onPlay, std::string resumeItemId = "")
+              std::function<void()> onPlay, std::string resumeItemId = "", bool openDownloads = false)
       : ActivityWithSubactivity("Audiobookshelf", renderer, mappedInput),
         onClose(std::move(onClose)),
         onPlay(std::move(onPlay)),
-        resumeId(std::move(resumeItemId)) {}
+        resumeId(std::move(resumeItemId)),
+        openDownloads(openDownloads) {}
 
   void onEnter() override;
   void onExit() override;
@@ -79,7 +83,12 @@ class AbsActivity final : public ActivityWithSubactivity {
     Download,
     PlayLocal,
     DeleteLocal,
-    PauseDownload,
+    ShowDownloads,
+    SelectDownload,  ///< index = position in the queue
+    QueueUp,
+    QueueDown,
+    QueueNow,
+    QueueRemove,
   };
   struct Target {
     int x, y, w, h;
@@ -91,6 +100,10 @@ class AbsActivity final : public ActivityWithSubactivity {
   const std::function<void()> onPlay;
   std::string resumeId;   ///< a book to open and play as soon as the screen can (Audiobooks page)
   bool autoPlay = false;  ///< play the book whose details arrive next
+  bool openDownloads = false;       ///< start on the Downloads page
+  int downloadSel = 0;              ///< the selected book on the Downloads page
+  View downloadsFrom = View::Home;  ///< where Back from Downloads goes
+  uint32_t renderedQueue = 0;       ///< AbsQueue::changeCounter() at the last render
 
   View view = View::SignIn;
   std::vector<Target> targets;

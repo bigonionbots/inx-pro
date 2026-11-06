@@ -15,6 +15,7 @@
 #include <cstdio>
 
 #include "abs/AbsCovers.h"
+#include "abs/AbsQueue.h"
 #include "activity/page/SubPage.h"
 #include "system/AudioLink.h"
 #include "system/Fonts.h"
@@ -24,6 +25,7 @@
 
 extern void onGoToAudiobookshelf();
 extern void onResumeAudiobookshelf(const std::string& itemId);
+extern void onOpenAbsDownloads();
 
 namespace {
 
@@ -269,6 +271,9 @@ void AudioPlayerActivity::run(const Action action, const int index) {
         return;
       }
       break;
+    case Action::ShowDownloads:
+      onOpenAbsDownloads();
+      return;
     case Action::ResumeStreamed:
       if (index >= 0 && index < static_cast<int>(recent.size())) {
         onResumeAudiobookshelf(recent[index].itemId);  // fetches it and plays (or plays a download)
@@ -577,7 +582,12 @@ void AudioPlayerActivity::renderBooks(int y) {
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
   const int top = y;
 
-  button(MARGIN, y, inner, BUTTON_HEIGHT, "Audiobookshelf", Action::ShowAudiobookshelf);
+  // Audiobookshelf, and its download queue (with how many books are in it).
+  const int half = (inner - GAP) / 2;
+  button(MARGIN, y, half, BUTTON_HEIGHT, "Audiobookshelf", Action::ShowAudiobookshelf);
+  const size_t queued = AbsQueue::entries().size();
+  const std::string downloads = queued ? "Downloads (" + std::to_string(queued) + ")" : "Downloads";
+  button(MARGIN + half + GAP, y, inner - half - GAP, BUTTON_HEIGHT, downloads.c_str(), Action::ShowDownloads);
   y += BUTTON_HEIGHT + 2 * GAP;
 
   const auto label = [&](const char* text) {

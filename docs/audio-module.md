@@ -248,16 +248,31 @@ and lets Wi-Fi go ("Wi-Fi off while paused"); Play reconnects with the saved net
 restarts it at the same place ("Reconnecting Wi-Fi..." until it plays).
 
 **Downloads.** A book goes into `/Audiobooks/<title>/`, together with `.abs.json` (item id,
-server track order, per-track offsets, `complete`). An incomplete download is hidden from the
-local list. The download runs only while its screen is open:
+server track order, per-track offsets, chapters, `complete`). An incomplete download is hidden
+from the local list.
+
+**The download queue** (`AbsQueue`, saved in `/.system/abs_queue.json`). **Download to device**
+adds a book to the queue; it downloads in the background, whatever screen is open, while the T5
+is on a charger (the BQ25896 sees external power on VBUS; the boost that powers the audio module
+does not count). On the charger the T5 stays awake until the queue is done, then sleeps as usual;
+unplugging pauses a charger-only download, which resumes from the card next time. The
+**Downloads** page (Audiobooks page, Audiobookshelf -> More, or a queued book's page) lists the
+queue with each book's state and progress; select a book to move it **Up** / **Down**, start it
+**Now** (also on battery: it then keeps the T5 awake only while the page is open), or **Remove**
+it (which deletes what it had downloaded). A book that fails (no Wi-Fi, server down) is tried
+again after 10 minutes and does not keep the T5 awake meanwhile. The queue fetches each book's
+details on a task of its own, holding a Wi-Fi share (saved networks) until its download ends.
+
+How a book downloads:
 - each track is one streaming request from where the card's copy ends (`Range: bytes=N-`), so
   a download pays one TLS handshake per track; it reconnects from where it stopped when the
   connection drops (up to 5 times in a row without progress). Fetching it in 128 KB ranges, as
   streaming playback does to seek, cost a handshake per range and ran at ~50 KB/s through a
   Cloudflare tunnel;
 - the network task (one long-lived task, stack in PSRAM) fills 64 KB PSRAM buffers;
-- the main loop writes them to the card, because SD access from other tasks races the reader;
-- leaving the screen pauses it, and Resume continues from the bytes already on the card.
+- the main loop writes them to the card (`AbsQueue::service()` -> `AbsDownloader::service()`),
+  because SD access from other tasks races the reader;
+- a paused download continues from the bytes already on the card.
 
 **Progress sync.** Downloaded and streamed copies of a book share one local progress entry
 (`abs:<itemId>` in `/.system/audio_progress.txt`). It is reconciled with `GET`/`PATCH

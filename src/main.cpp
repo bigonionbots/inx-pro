@@ -53,6 +53,7 @@
 #if INX_HAS_AUDIO_MODULE
 #include "abs/AbsClient.h"
 #include "abs/AbsCovers.h"
+#include "abs/AbsQueue.h"
 #include "abs/AbsWifi.h"
 #include "activity/settings/AbsActivity.h"
 #include "activity/settings/AudioPlayerActivity.h"
@@ -251,6 +252,11 @@ void onGoToAudiobookshelf() {
   switchTo<AbsActivity>(render, input, [] { onGoToAudiobooks(); }, [] { onGoToAudiobooks(); });
 }
 
+/** Opens the Audiobookshelf download queue (the Audiobooks page). */
+void onOpenAbsDownloads() {
+  switchTo<AbsActivity>(render, input, [] { onGoToAudiobooks(); }, [] { onGoToAudiobooks(); }, "", true);
+}
+
 /** Opens Audiobookshelf on a recently streamed book and plays it (the Audiobooks page). */
 void onResumeAudiobookshelf(const std::string& itemId) {
   switchTo<AbsActivity>(render, input, [] { onGoToAudiobooks(); }, [] { onGoToAudiobooks(); }, itemId);
@@ -361,6 +367,7 @@ void waitForPowerRelease() {
 void enterDeepSleep() {
 #if INX_HAS_AUDIO_MODULE
   AudioPlayer::shutdown();
+  AbsQueue::shutdown();
   // The charger keeps boosting through deep sleep, so the module would drain the battery.
   AudioModule::shutdown();
 #endif
@@ -423,6 +430,7 @@ void setup() {
   AudioLink::begin();
   AudioPlayer::begin();
   Abs::begin();
+  AbsQueue::begin();
   AbsWifi::prepare();
 #endif
 
@@ -488,6 +496,7 @@ void loop() {
   AudioPlayer::service();
   Abs::service();
   AbsCovers::service();
+  AbsQueue::service();  // queued downloads run in the background, on the charger
 #endif
 
   LibraryIndexRefresh::render(renderer);
@@ -499,6 +508,8 @@ void loop() {
 #if INX_HAS_AUDIO_MODULE
   // An audiobook keeps playing in the background while reading.
   keepAwake = keepAwake || AudioPlayer::keepAwake();
+  // On the charger with downloads queued: awake until they are done (AbsQueue.h).
+  keepAwake = keepAwake || AbsQueue::keepAwake();
 #endif
   if (keepAwake) {
     lastActivityTime = millis();

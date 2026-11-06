@@ -20,6 +20,7 @@
 #include "abs/AbsDownloader.h"
 #include "abs/AbsLibrary.h"
 #include "abs/AbsLocal.h"
+#include "abs/AbsQueue.h"
 #include "abs/AbsWifi.h"
 #include "activity/network/WifiSelectionActivity.h"
 #include "activity/page/SubPage.h"
@@ -96,6 +97,10 @@ void AbsActivity::onEnter() {
       resumeIfAsked();
     } else {
       loadLibraries();  // first visit: nothing cached, so wait for the server (resumes after)
+    }
+    if (openDownloads) {
+      downloadsFrom = View::Home;
+      showView(View::Download);  // the queue needs nothing from the server
     }
   } else {
     showView(View::SignIn);
@@ -292,7 +297,6 @@ void AbsActivity::openBook(const std::string& itemId, const View from) {
 
 void AbsActivity::onExit() {
   AbsCovers::cancel();
-  if (AbsDownloader::status().active) AbsDownloader::pause();
   // The workers write into this activity: let them finish (a request times out within ~20 s).
   for (int i = 0; i < 500 && (busy || refreshing); ++i) vTaskDelay(pdMS_TO_TICKS(50));
   deleteRefreshTask();
@@ -302,7 +306,10 @@ void AbsActivity::onExit() {
 }
 
 bool AbsActivity::preventAutoSleep() {
-  return ActivityWithSubactivity::preventAutoSleep() || busy || AbsDownloader::status().active;
+  // On the charger the queue keeps the T5 awake by itself (AbsQueue::keepAwake()); a download
+  // started on battery does so only while its page is open.
+  return ActivityWithSubactivity::preventAutoSleep() || busy ||
+         (view == View::Download && AbsDownloader::status().active);
 }
 
 void AbsActivity::showView(const View next) {
@@ -435,7 +442,6 @@ void AbsActivity::loop() {
     subActivity->loop();
     return;
   }
-  if (view == View::Download) AbsDownloader::service();
 
   if (resultReady.exchange(false)) {
     // The worker finished: views that need SD state get it here, on the main loop.
@@ -479,9 +485,9 @@ void AbsActivity::loop() {
     }
     switch (view) {
       case View::Download:
-        AbsDownloader::pause();
-        refreshLocalState();
-        showView(View::Detail);
+        if (openDownloads) break;  // opened from the Audiobooks page: back there
+        if (downloadsFrom == View::Detail) refreshLocalState();
+        showView(downloadsFrom);
         return;
       case View::Detail:
         showView(detailFrom);
@@ -539,7 +545,10 @@ void AbsActivity::loop() {
                                 [](const std::string& id) { return AbsCovers::cached(id); });
   }
   const bool coverTick = coversArrived && !busy;
-  const bool downloadTick = view == View::Download && millis() - lastRenderMs >= DOWNLOAD_REDRAW_MS;
+  // The Downloads page: progress every few seconds while one runs, and any change in the queue.
+  const bool downloadTick =
+      view == View::Download && ((AbsDownloader::status().active && millis() - lastRenderMs >= DOWNLOAD_REDRAW_MS) ||
+                                 AbsQueue::changeCounter() != renderedQueue);
   if (updateRequired || downloadTick || coverTick) {
     updateRequired = false;
     render();
@@ -695,28 +704,54 @@ void AbsActivity::run(const Action action, const int index) {
       }
       return;
     }
-    case Action::Download: {
-      std::string failure;
-      if (AbsDownloader::start(detail, failure)) {
-        showView(View::Download);
-      } else {
-        error = failure;
-        updateRequired = true;
-      }
+    case Action::Download:
+      // Queued: it downloads in the background on the charger (Start now on the page for battery).
+      AbsQueue::add(detail.id, detail.title, detail.author);
+      downloadsFrom = View::Detail;
+      showView(View::Download);
       return;
-    }
     case Action::DeleteLocal: {
-      AbsLocal::BookMeta meta;
-      if (AbsLocal::find(detail.id, meta)) AbsLocal::remove(meta);
+      if (AbsQueue::contains(detail.id)) {
+        AbsQueue::remove(detail.id);  // stops it and deletes what it had
+      } else {
+        AbsLocal::BookMeta meta;
+        if (AbsLocal::find(detail.id, meta)) AbsLocal::remove(meta);
+      }
       refreshLocalState();
       updateRequired = true;
       return;
     }
-    case Action::PauseDownload:
-      AbsDownloader::pause();
-      refreshLocalState();
-      showView(View::Detail);
+    case Action::ShowDownloads:
+      downloadsFrom = view == View::Download ? downloadsFrom : view;
+      showView(View::Download);
       return;
+    case Action::SelectDownload:
+      downloadSel = index;
+      updateRequired = true;
+      return;
+    case Action::QueueUp:
+    case Action::QueueDown:
+    case Action::QueueNow:
+    case Action::QueueRemove: {
+      const std::vector<AbsQueue::Entry> queued = AbsQueue::entries();
+      if (downloadSel < 0 || downloadSel >= static_cast<int>(queued.size())) return;
+      const std::string id = queued[downloadSel].itemId;
+      if (action == Action::QueueUp) {
+        AbsQueue::move(id, -1);
+        downloadSel = std::max(0, downloadSel - 1);
+      } else if (action == Action::QueueDown) {
+        AbsQueue::move(id, 1);
+        downloadSel = std::min(static_cast<int>(queued.size()) - 1, downloadSel + 1);
+      } else if (action == Action::QueueNow) {
+        AbsQueue::startNow(id);
+        downloadSel = 0;
+      } else {
+        AbsQueue::remove(id);
+        downloadSel = std::max(0, std::min(downloadSel, static_cast<int>(queued.size()) - 2));
+      }
+      updateRequired = true;
+      return;
+    }
   }
 }
 
@@ -763,6 +798,7 @@ void AbsActivity::render() {
   targets.clear();
   missingCovers.clear();
   renderedCovers = AbsCovers::changeCounter();
+  renderedQueue = AbsQueue::changeCounter();
   renderer.clearScreen();
   std::string title;
   switch (view) {
@@ -773,7 +809,7 @@ void AbsActivity::render() {
       title = "Book";
       break;
     case View::Download:
-      title = "Download";
+      title = "Downloads";
       break;
     case View::Authors:
       title = "Authors";
@@ -932,6 +968,10 @@ void AbsActivity::renderMore(int y) {
     }
     y += 2 * GAP;
   }
+  const size_t queued = AbsQueue::entries().size();
+  const std::string downloads = queued ? "Downloads (" + std::to_string(queued) + ")" : "Downloads";
+  button(MARGIN, y, inner, BUTTON_HEIGHT, downloads.c_str(), Action::ShowDownloads);
+  y += BUTTON_HEIGHT + GAP;
   const int half = (inner - GAP) / 2;
   button(MARGIN, y, half, BUTTON_HEIGHT, refreshing ? "Updating..." : "Refresh", Action::Refresh);
   button(MARGIN + half + GAP, y, inner - half - GAP, BUTTON_HEIGHT, "Sign out", Action::SignOut);
@@ -1152,6 +1192,8 @@ void AbsActivity::renderDetail(int y) {
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Play from device", Action::PlayLocal, 0, true);
     y += BUTTON_HEIGHT + GAP;
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Delete from device", Action::DeleteLocal);
+  } else if (AbsQueue::contains(detail.id)) {
+    button(MARGIN, y, inner, BUTTON_HEIGHT, "In the download queue", Action::ShowDownloads);
   } else if (localCopy) {
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Resume download", Action::Download);
     y += BUTTON_HEIGHT + GAP;
@@ -1162,47 +1204,88 @@ void AbsActivity::renderDetail(int y) {
 }
 
 void AbsActivity::renderDownload(int y) {
+  // The download queue: the charger, the books in order with their state, and the controls.
+  const std::vector<AbsQueue::Entry> queued = AbsQueue::entries();
   const AbsDownloader::Status s = AbsDownloader::status();
   const int width = renderer.getScreenWidth();
   const int inner = width - 2 * MARGIN;
   const int font = systemFontId();
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
 
-  renderer.text.render(font, MARGIN, y, renderer.text.truncate(font, s.title.c_str(), inner).c_str(), true,
+  const bool charging = AbsQueue::charging();
+  const char* power = charging ? "On the charger: queued books download now."
+                               : "Not charging: queued books wait for the charger (or Now).";
+  renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, power, inner).c_str(), true,
                        EpdFontFamily::BOLD);
-  y += renderer.text.getLineHeight(font) + 2 * GAP;
-  renderer.rectangle.render(MARGIN, y, inner, 18, true);
-  if (s.totalBytes) {
-    const int filled = static_cast<int>(static_cast<uint64_t>(inner - 4) * s.doneBytes / s.totalBytes);
-    if (filled > 0) renderer.rectangle.fill(MARGIN + 2, y + 2, filled, 14, true);
-  }
-  y += 18 + GAP;
-  char line[128];
-  snprintf(line, sizeof(line), "%s of %s  -  file %d of %d", formatMb(s.doneBytes).c_str(),
-           formatMb(s.totalBytes).c_str(), s.track + 1, s.trackCount);
-  renderer.text.render(smallFont, MARGIN, y, line);
-  y += renderer.text.getLineHeight(smallFont) + 4;
-  if (s.active && s.bytesPerSecond) {
-    const uint64_t left = s.totalBytes > s.doneBytes ? s.totalBytes - s.doneBytes : 0;
-    snprintf(line, sizeof(line), "%.0f KB/s  -  about %s left", s.bytesPerSecond / 1024.0,
-             formatDuration(static_cast<uint32_t>(left / s.bytesPerSecond)).c_str());
-    renderer.text.render(smallFont, MARGIN, y, line);
-  }
-  y += renderer.text.getLineHeight(smallFont) + 3 * GAP;
+  y += renderer.text.getLineHeight(smallFont) + GAP;
 
-  if (s.done) {
-    renderer.text.render(font, MARGIN, y, "Downloaded.");
-    y += renderer.text.getLineHeight(font) + 2 * GAP;
-    button(MARGIN, y, inner, BUTTON_HEIGHT, "Play from device", Action::PlayLocal, 0, true);
-  } else if (s.failed) {
-    renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, s.error.c_str(), inner).c_str(), true,
-                         EpdFontFamily::BOLD);
-    y += renderer.text.getLineHeight(smallFont) + 2 * GAP;
-    button(MARGIN, y, inner, BUTTON_HEIGHT, "Retry", Action::Download, 0, true);
-  } else {
-    renderer.text.render(smallFont, MARGIN, y, "Keep this screen open: the download pauses when you leave it.");
-    y += renderer.text.getLineHeight(smallFont) + 2 * GAP;
-    button(MARGIN, y, inner, BUTTON_HEIGHT, "Pause", Action::PauseDownload);
+  if (queued.empty()) {
+    renderer.text.render(font, MARGIN, y, "No downloads queued.");
+    y += renderer.text.getLineHeight(font) + GAP;
+    renderer.text.render(smallFont, MARGIN, y, "Open a book and tap Download to device.");
+    return;
+  }
+  if (downloadSel >= static_cast<int>(queued.size())) downloadSel = static_cast<int>(queued.size()) - 1;
+
+  const int controlsY = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
+  const int rows = std::max(1, (controlsY - y - GAP) / BOOK_ROW_HEIGHT);
+  // Keep the selected book on screen.
+  const int first = std::max(0, std::min(downloadSel - rows + 1, static_cast<int>(queued.size()) - rows));
+  for (int i = std::max(0, first); i < static_cast<int>(queued.size()) && i < first + rows; ++i) {
+    const AbsQueue::Entry& e = queued[i];
+    const bool selected = i == downloadSel;
+    const int cover = BOOK_ROW_HEIGHT - 2 * ROW_COVER_INSET;
+    drawCover(e.itemId, MARGIN, y + ROW_COVER_INSET, cover);
+    const int textX = MARGIN + cover + GAP;
+    const int textW = inner - cover - GAP;
+    const std::string title = (selected ? "> " : "") + std::to_string(i + 1) + ". " + e.title;
+    renderer.text.render(font, textX, y + 10, renderer.text.truncate(font, title.c_str(), textW).c_str(), true,
+                         selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    std::string state;
+    switch (e.state) {
+      case AbsQueue::State::Downloading:
+        if (s.itemId == e.itemId && s.totalBytes) {
+          char line[96];
+          snprintf(line, sizeof(line), "Downloading %d%%  -  %s of %s",
+                   static_cast<int>(100 * s.doneBytes / s.totalBytes), formatMb(s.doneBytes).c_str(),
+                   formatMb(s.totalBytes).c_str());
+          state = line;
+          if (s.bytesPerSecond) {
+            const uint64_t left = s.totalBytes > s.doneBytes ? s.totalBytes - s.doneBytes : 0;
+            snprintf(line, sizeof(line), "  -  %.0f KB/s, %s left", s.bytesPerSecond / 1024.0,
+                     formatDuration(static_cast<uint32_t>(left / s.bytesPerSecond)).c_str());
+            state += line;
+          }
+        } else {
+          state = "Downloading...";
+        }
+        break;
+      case AbsQueue::State::Starting:
+        state = "Starting...";
+        break;
+      case AbsQueue::State::Failed:
+        state = "Failed: " + e.error + " (retrying later)";
+        break;
+      case AbsQueue::State::Waiting:
+        state = e.now || charging ? "Next" : "Waiting for the charger";
+        if (e.now && !charging) state += " (Now: on battery)";
+        break;
+    }
+    renderer.text.render(smallFont, textX, y + 16 + renderer.text.getLineHeight(font),
+                         renderer.text.truncate(smallFont, state.c_str(), textW).c_str());
+    row(y, BOOK_ROW_HEIGHT, Action::SelectDownload, i);
+    y += BOOK_ROW_HEIGHT;
+  }
+
+  // The selected book: earlier, later, start now (also on battery), remove (and delete its part).
+  const int quarter = (inner - 3 * GAP) / 4;
+  const struct {
+    const char* label;
+    Action action;
+  } controls[] = {
+      {"Up", Action::QueueUp}, {"Down", Action::QueueDown}, {"Now", Action::QueueNow}, {"Remove", Action::QueueRemove}};
+  for (int i = 0; i < 4; ++i) {
+    button(MARGIN + i * (quarter + GAP), controlsY, quarter, BUTTON_HEIGHT, controls[i].label, controls[i].action);
   }
 }
 

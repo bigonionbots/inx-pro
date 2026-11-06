@@ -59,6 +59,7 @@ class AudioPlayerActivity final : public Activity {
     ShowAudiobookshelf,
     OpenBook,
     ResumeStreamed,  ///< index = position in `recent`
+    ShowDownloads,
     BooksPageUp,
     BooksPageDown,
     UseBluetooth,

@@ -6,8 +6,10 @@
  *
  * A network task reads the tracks through HttpAudioFile into a few PSRAM buffers; service() on
  * the main loop writes them to the card, because SD access from another task would race the
- * reader (see AudioPlayer.h). The download only runs while its screen keeps calling service();
- * pause() stops it, and start() again continues from the bytes already on the card.
+ * reader (see AudioPlayer.h). AbsQueue drives it: it calls service() every main loop (so a
+ * download runs in the background, whatever screen is open), starts the next queued book and
+ * pauses one when the charger goes. pause() stops it, and start() again continues from the bytes
+ * already on the card.
  */
 
 #if INX_HAS_AUDIO_MODULE
