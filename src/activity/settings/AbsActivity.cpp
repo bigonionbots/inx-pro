@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <ctime>
 #include <memory>
 #include <numeric>
 
@@ -50,6 +51,9 @@ constexpr unsigned long DOWNLOAD_REDRAW_MS = 3000;
 constexpr uint32_t WORKER_STACK = 12288;  // TLS
 /** The index is fetched again (in the background) at most this often, unless asked to. */
 constexpr unsigned long INDEX_REFRESH_MS = 10 * 60 * 1000;
+/** A podcast's page lists this many of its newest episodes (each is a few small allocations). */
+constexpr size_t SHOW_EPISODES = 100;
+constexpr int SHOW_COVER = 120;
 
 // Across visits to the screen (this boot): the library last opened, and when its index was fetched.
 std::string lastLibraryId;
@@ -65,6 +69,17 @@ std::string formatDuration(const uint32_t seconds) {
     snprintf(text, sizeof(text), "%lu min", static_cast<unsigned long>(seconds / 60));
   }
   return text;
+}
+
+/** "12 Mar 2026" from epoch ms (UTC; a day is all an episode list needs). */
+std::string formatDate(const uint64_t epochMs) {
+  if (!epochMs) return "";
+  const time_t seconds = static_cast<time_t>(epochMs / 1000);
+  tm parts{};
+  gmtime_r(&seconds, &parts);
+  char text[24];
+  strftime(text, sizeof(text), "%d %b %Y", &parts);
+  return text[0] == '0' ? text + 1 : text;
 }
 
 std::string formatMb(const uint64_t bytes) {
@@ -269,6 +284,29 @@ void AbsActivity::playIfAsked() {
   autoPlay = false;
   refreshLocalState();
   run(localComplete ? Action::PlayLocal : Action::Stream, 0);
+}
+
+void AbsActivity::openItem(const std::string& itemId, const View from) {
+  if (library.podcasts && !Abs::isEpisode(itemId)) {
+    loadShow(itemId, from);
+  } else {
+    openBook(itemId, from);
+  }
+}
+
+void AbsActivity::loadShow(const std::string& itemId, const View from) {
+  showFrom = from;
+  startWork(
+      "Loading podcast...",
+      [this, itemId](std::string& failure) {
+        Abs::Podcast loaded;
+        if (!Abs::podcast(itemId, SHOW_EPISODES, loaded, failure)) return;
+        xSemaphoreTake(dataLock, portMAX_DELAY);
+        show = std::move(loaded);
+        showFirst = 0;
+        xSemaphoreGive(dataLock);
+      },
+      View::Show);
 }
 
 void AbsActivity::openBook(const std::string& itemId, const View from) {
@@ -503,6 +541,10 @@ void AbsActivity::loop() {
       case View::Letters:
         showView(View::List);
         return;
+      case View::Show:
+        showView(showFrom);
+        if (showFrom == View::Home) startRefresh(false);
+        return;
       case View::More:
         if (!library.id.empty()) {
           showView(View::Home);
@@ -531,7 +573,7 @@ void AbsActivity::loop() {
       }
     }
   }
-  if (!busy && (view == View::List || view == View::Authors)) {
+  if (!busy && (view == View::List || view == View::Authors || view == View::Show)) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Up)) run(Action::PageUp, 0);
     if (mappedInput.wasPressed(MappedInputManager::Button::Down)) run(Action::PageDown, 0);
   }
@@ -618,14 +660,14 @@ void AbsActivity::run(const Action action, const int index) {
       return;
     case Action::OpenBook:
       if (index >= 0 && index < static_cast<int>(listBooks.size())) {
-        openBook(std::string(this->index.text(this->index.book(listBooks[index]).id)), View::List);
+        openItem(std::string(this->index.text(this->index.book(listBooks[index]).id)), View::List);
       }
       return;
     case Action::OpenShelfBook: {
       const size_t shelf = static_cast<size_t>(index / SHELF_INDEX);
       const size_t row = static_cast<size_t>(index % SHELF_INDEX);
       if (shelf < shelves.size() && row < shelves[shelf].items.size())
-        openBook(shelves[shelf].items[row].id, View::Home);
+        openItem(shelves[shelf].items[row].id, View::Home);
       return;
     }
     case Action::ShowAz:
@@ -681,7 +723,10 @@ void AbsActivity::run(const Action action, const int index) {
     case Action::PageUp:
     case Action::PageDown: {
       const bool down = action == Action::PageDown;
-      if (view == View::Authors) {
+      if (view == View::Show) {
+        const int count = static_cast<int>(show.episodes.size());
+        showFirst = std::max(0, std::min(showFirst + (down ? showRows : -showRows), std::max(0, count - 1)));
+      } else if (view == View::Authors) {
         const int rows = rowsPerPage(ROW_HEIGHT);
         const int count = static_cast<int>(this->index.authors().size());
         authorsFirst = std::max(0, std::min(authorsFirst + (down ? rows : -rows), std::max(0, count - 1)));
@@ -704,7 +749,13 @@ void AbsActivity::run(const Action action, const int index) {
       }
       return;
     }
+    case Action::OpenEpisode:
+      if (index >= 0 && index < static_cast<int>(show.episodes.size())) {
+        openBook(show.id + "/" + show.episodes[index].id, View::Show);
+      }
+      return;
     case Action::Download:
+      if (Abs::isEpisode(detail.id)) return;  // episodes stream only (for now)
       // Queued: it downloads in the background on the charger (Start now on the page for battery).
       AbsQueue::add(detail.id, detail.title, detail.author);
       downloadsFrom = View::Detail;
@@ -806,7 +857,10 @@ void AbsActivity::render() {
       title = listKind == ListKind::Az ? "A-Z" : (listKind == ListKind::Author ? listKey : "\"" + listKey + "\"");
       break;
     case View::Detail:
-      title = "Book";
+      title = Abs::isEpisode(detail.id) ? "Episode" : "Book";
+      break;
+    case View::Show:
+      title = "Podcast";
       break;
     case View::Download:
       title = "Downloads";
@@ -903,6 +957,9 @@ void AbsActivity::render() {
       case View::Download:
         renderDownload(y);
         break;
+      case View::Show:
+        renderShow(y);
+        break;
     }
   }
   renderer.displayBuffer();
@@ -948,12 +1005,13 @@ void AbsActivity::renderMore(int y) {
     y += renderer.text.getLineHeight(smallFont) + GAP;
   }
   if (!index.empty()) {
-    const std::string count = std::to_string(index.size()) + " books in the saved library.";
+    const std::string count =
+        std::to_string(index.size()) + (library.podcasts ? " podcasts" : " books") + " in the saved library.";
     renderer.text.render(smallFont, MARGIN, y, count.c_str());
     y += renderer.text.getLineHeight(smallFont) + GAP;
   }
   if (libraries.empty()) {
-    renderer.text.render(font, MARGIN, y, "No audiobook libraries on this server.");
+    renderer.text.render(font, MARGIN, y, "No audiobook or podcast libraries on this server.");
     y += renderer.text.getLineHeight(font) + 2 * GAP;
   }
   if (libraries.size() > 1 || library.id.empty()) {
@@ -1017,8 +1075,8 @@ void AbsActivity::renderList(int y) {
       info = std::to_string(b.progress / 10) + "%  -  ";
     }
     const std::string_view author = index.text(b.author);
-    if (!author.empty()) info += std::string(author) + "  -  ";
-    info += formatDuration(b.durationSec);
+    if (!author.empty()) info += std::string(author);
+    if (b.durationSec) info += (author.empty() ? "" : "  -  ") + formatDuration(b.durationSec);
     const auto local =
         std::find_if(downloaded.begin(), downloaded.end(), [&id](const auto& entry) { return entry.first == id; });
     if (local != downloaded.end()) info += local->second ? "  -  on device" : "  -  partly downloaded";
@@ -1043,7 +1101,9 @@ void AbsActivity::renderAuthors(int y) {
   const int rows = rowsPerPage(ROW_HEIGHT);
   const int count = static_cast<int>(authors.size());
   for (int i = authorsFirst; i < count && i < authorsFirst + rows; ++i) {
-    const std::string books = std::to_string(authors[i].count) + (authors[i].count == 1 ? " book" : " books");
+    const char* noun = library.podcasts ? (authors[i].count == 1 ? " podcast" : " podcasts")
+                                        : (authors[i].count == 1 ? " book" : " books");
+    const std::string books = std::to_string(authors[i].count) + noun;
     const int booksW = renderer.text.getWidth(smallFont, books.c_str());
     renderer.text.render(
         font, MARGIN, y + (ROW_HEIGHT - renderer.text.getLineHeight(font)) / 2,
@@ -1078,7 +1138,9 @@ void AbsActivity::renderHome(int y) {
   const int buttonsY = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
 
   if (shelves.empty()) {
-    renderer.text.render(font, MARGIN, y, "Nothing in progress or recently added.");
+    renderer.text.render(
+        font, MARGIN, y,
+        library.podcasts ? "No new or unfinished episodes." : "Nothing in progress or recently added.");
   }
   for (size_t s = 0; s < shelves.size(); ++s) {
     const Abs::Shelf& shelf = shelves[s];
@@ -1104,8 +1166,8 @@ void AbsActivity::renderHome(int y) {
       } else if (b.progress > 0.0f) {
         info = std::to_string(static_cast<int>(b.progress * 100)) + "%  -  ";
       }
-      if (!b.author.empty()) info += b.author + "  -  ";
-      info += formatDuration(b.durationSec);
+      if (!b.author.empty()) info += b.author;
+      if (b.durationSec) info += (b.author.empty() ? "" : "  -  ") + formatDuration(b.durationSec);
       const int infoY = y + 12 + renderer.text.getLineHeight(font);
       renderer.text.render(smallFont, textX, infoY, renderer.text.truncate(smallFont, info.c_str(), textW).c_str());
       row(y, SHELF_ROW_HEIGHT, Action::OpenShelfBook, static_cast<int>(s) * SHELF_INDEX + static_cast<int>(i));
@@ -1172,10 +1234,15 @@ void AbsActivity::renderDetail(int y) {
   }
   const uint64_t size = std::accumulate(detail.tracks.begin(), detail.tracks.end(), uint64_t{0},
                                         [](const uint64_t sum, const Abs::Track& t) { return sum + t.sizeBytes; });
+  const bool episode = Abs::isEpisode(detail.id);
   char info[128];
-  snprintf(info, sizeof(info), "%s  -  %u %s  -  %s", formatDuration(detail.durationMs / 1000).c_str(),
-           static_cast<unsigned>(detail.tracks.size()), detail.tracks.size() == 1 ? "file" : "files",
-           formatMb(size).c_str());
+  if (episode) {
+    snprintf(info, sizeof(info), "%s  -  %s", formatDuration(detail.durationMs / 1000).c_str(), formatMb(size).c_str());
+  } else {
+    snprintf(info, sizeof(info), "%s  -  %u %s  -  %s", formatDuration(detail.durationMs / 1000).c_str(),
+             static_cast<unsigned>(detail.tracks.size()), detail.tracks.size() == 1 ? "file" : "files",
+             formatMb(size).c_str());
+  }
   renderer.text.render(smallFont, textX, y, renderer.text.truncate(smallFont, info, textW).c_str());
   y += renderer.text.getLineHeight(smallFont) + 4;
   if (serverProgress.exists) {
@@ -1188,6 +1255,7 @@ void AbsActivity::renderDetail(int y) {
 
   button(MARGIN, y, inner, BUTTON_HEIGHT, "Stream over Wi-Fi", Action::Stream, 0, !localComplete);
   y += BUTTON_HEIGHT + GAP;
+  if (episode) return;  // no episode downloads yet
   if (localComplete) {
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Play from device", Action::PlayLocal, 0, true);
     y += BUTTON_HEIGHT + GAP;
@@ -1201,6 +1269,60 @@ void AbsActivity::renderDetail(int y) {
   } else {
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Download to device", Action::Download);
   }
+}
+
+void AbsActivity::renderShow(int y) {
+  const int width = renderer.getScreenWidth();
+  const int inner = width - 2 * MARGIN;
+  const int font = systemFontId();
+  constexpr int titleFont = MONTSERRAT_18_FONT_ID;
+  constexpr int smallFont = MONTSERRAT_10_FONT_ID;
+
+  // The podcast: cover, title, author, how many episodes.
+  const int headTop = y;
+  drawCover(show.id, MARGIN, y, SHOW_COVER);
+  const int textX = MARGIN + SHOW_COVER + GAP;
+  const int textW = inner - SHOW_COVER - GAP;
+  renderer.text.render(titleFont, textX, y, renderer.text.truncate(titleFont, show.title.c_str(), textW).c_str(), true,
+                       EpdFontFamily::BOLD);
+  y += renderer.text.getLineHeight(titleFont) + GAP;
+  if (!show.author.empty()) {
+    renderer.text.render(font, textX, y, renderer.text.truncate(font, show.author.c_str(), textW).c_str());
+    y += renderer.text.getLineHeight(font) + GAP;
+  }
+  std::string count = std::to_string(show.episodeCount) + (show.episodeCount == 1 ? " episode" : " episodes");
+  if (show.episodeCount > show.episodes.size())
+    count += " (the newest " + std::to_string(show.episodes.size()) + " here)";
+  renderer.text.render(smallFont, textX, y, renderer.text.truncate(smallFont, count.c_str(), textW).c_str());
+  y = std::max(y + renderer.text.getLineHeight(smallFont), headTop + SHOW_COVER) + GAP;
+
+  if (show.episodes.empty()) {
+    renderer.text.render(font, MARGIN, y, "No episodes on the server.");
+    return;
+  }
+  const int pagerY = renderer.getScreenHeight() - BUTTON_HEIGHT - 2 * GAP;
+  showRows = std::max(1, (pagerY - y - GAP) / BOOK_ROW_HEIGHT);
+  const int total = static_cast<int>(show.episodes.size());
+  for (int i = showFirst; i < total && i < showFirst + showRows; ++i) {
+    const Abs::Episode& e = show.episodes[i];
+    renderer.text.render(font, MARGIN, y + 10, renderer.text.truncate(font, e.title.c_str(), inner).c_str(), true,
+                         EpdFontFamily::BOLD);
+    // Progress first, then the date and length.
+    std::string info;
+    if (e.finished) {
+      info = "Finished  -  ";
+    } else if (e.progress > 0.0f) {
+      info = std::to_string(static_cast<int>(e.progress * 100)) + "%  -  ";
+    }
+    const std::string date = formatDate(e.publishedMs);
+    if (!date.empty()) info += date;
+    if (e.durationSec) info += (date.empty() ? "" : "  -  ") + formatDuration(e.durationSec);
+    renderer.text.render(smallFont, MARGIN, y + 16 + renderer.text.getLineHeight(font),
+                         renderer.text.truncate(smallFont, info.c_str(), inner).c_str());
+    row(y, BOOK_ROW_HEIGHT, Action::OpenEpisode, i);
+    y += BOOK_ROW_HEIGHT;
+  }
+  pager(pagerY, showFirst > 0, showFirst + showRows < total, false);
 }
 
 void AbsActivity::renderDownload(int y) {

@@ -432,10 +432,19 @@ bool libraries(std::vector<Library>& out, std::string& error) {
   }
   out.clear();
   for (JsonObject library : doc["libraries"].as<JsonArray>()) {
-    if (std::string(library["mediaType"] | "book") != "book") continue;  // podcasts are not books
-    out.push_back({library["id"] | "", library["name"] | ""});
+    const std::string type = library["mediaType"] | "book";
+    if (type != "book" && type != "podcast") continue;
+    out.push_back({library["id"] | "", library["name"] | "", type == "podcast"});
   }
   return true;
+}
+
+/** A mediaProgress entry's id: the item's, or for an episode the combined one (isEpisode()). */
+static std::string progressId(JsonObject p) {
+  std::string id = p["libraryItemId"] | "";
+  const char* episode = p["episodeId"] | "";
+  if (*episode) id += std::string("/") + episode;
+  return id;
 }
 
 /** The user's progress for the markers in a list of books: one request for all of them. */
@@ -446,12 +455,13 @@ static void addProgress(std::vector<ItemSummary*> books) {
   JsonDocument meFilter;
   JsonObject progressFilter = meFilter["mediaProgress"][0].to<JsonObject>();
   progressFilter["libraryItemId"] = true;
+  progressFilter["episodeId"] = true;
   progressFilter["progress"] = true;
   progressFilter["isFinished"] = true;
   JsonDocument meDoc;
   if (deserializeJson(meDoc, me.body, DeserializationOption::Filter(meFilter)) != DeserializationError::Ok) return;
   for (JsonObject p : meDoc["mediaProgress"].as<JsonArray>()) {
-    const std::string id = p["libraryItemId"] | "";
+    const std::string id = progressId(p);
     for (ItemSummary* item : books) {
       if (item->id != id) continue;
       item->progress = p["progress"] | 0.0f;
@@ -466,14 +476,44 @@ static void addProgress(std::vector<ItemSummary>& books) {
   addProgress(all);
 }
 
-/** A minified library item (the items list and the shelves both send these). */
+/** The filter fields summaryOf() reads. */
+static void summaryFilter(JsonObject entry) {
+  entry["id"] = true;
+  entry["media"]["metadata"]["title"] = true;
+  entry["media"]["metadata"]["authorName"] = true;  // books
+  entry["media"]["metadata"]["author"] = true;      // podcasts
+  entry["media"]["duration"] = true;
+  entry["media"]["size"] = true;
+  JsonObject episode = entry["recentEpisode"].to<JsonObject>();
+  episode["id"] = true;
+  episode["title"] = true;
+  episode["duration"] = true;
+  episode["audioFile"]["duration"] = true;
+  episode["size"] = true;
+  episode["audioFile"]["metadata"]["size"] = true;
+}
+
+/**
+ * A minified library item (the items list and the shelves both send these): a book, a podcast,
+ * or (an episode shelf's, with recentEpisode) one episode of a podcast.
+ */
 static ItemSummary summaryOf(JsonObject entry) {
   ItemSummary item;
   item.id = entry["id"] | "";
-  item.title = entry["media"]["metadata"]["title"] | "";
-  item.author = entry["media"]["metadata"]["authorName"] | "";
+  JsonObject metadata = entry["media"]["metadata"];
+  item.title = metadata["title"] | "";
+  item.author = metadata["authorName"] | (metadata["author"] | "");
   item.durationSec = static_cast<uint32_t>(entry["media"]["duration"] | 0.0);
   item.sizeBytes = entry["media"]["size"] | 0ull;
+  JsonObject episode = entry["recentEpisode"];
+  const char* episodeId = episode["id"] | "";
+  if (*episodeId) {
+    item.id += std::string("/") + episodeId;
+    item.author = item.title;  // the podcast's
+    item.title = episode["title"] | "";
+    item.durationSec = static_cast<uint32_t>(episode["duration"] | (episode["audioFile"]["duration"] | 0.0));
+    item.sizeBytes = episode["size"] | (episode["audioFile"]["metadata"]["size"] | 0ull);
+  }
   return item;
 }
 
@@ -485,12 +525,7 @@ bool items(const std::string& libraryId, const int page, const int perPage, std:
   if (!api(HTTP_METHOD_GET, path, "", response, error)) return false;
   JsonDocument filter;
   filter["total"] = true;
-  JsonObject result = filter["results"][0].to<JsonObject>();
-  result["id"] = true;
-  result["media"]["metadata"]["title"] = true;
-  result["media"]["metadata"]["authorName"] = true;
-  result["media"]["duration"] = true;
-  result["media"]["size"] = true;
+  summaryFilter(filter["results"][0].to<JsonObject>());
   JsonDocument doc;
   if (deserializeJson(doc, response.body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) {
     error = "Unexpected reply from the server";
@@ -513,12 +548,7 @@ bool shelves(const std::string& libraryId, const int perShelf, std::vector<Shelf
   shelf["id"] = true;
   shelf["label"] = true;
   shelf["type"] = true;
-  JsonObject entity = shelf["entities"][0].to<JsonObject>();
-  entity["id"] = true;
-  entity["media"]["metadata"]["title"] = true;
-  entity["media"]["metadata"]["authorName"] = true;
-  entity["media"]["duration"] = true;
-  entity["media"]["size"] = true;
+  summaryFilter(shelf["entities"][0].to<JsonObject>());
   JsonDocument doc;
   if (deserializeJson(doc, response.body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) {
     error = "Unexpected reply from the server";
@@ -526,7 +556,8 @@ bool shelves(const std::string& libraryId, const int perShelf, std::vector<Shelf
   }
   out.clear();
   for (JsonObject s : doc.as<JsonArray>()) {
-    if (std::string(s["type"] | "") != "book") continue;
+    const std::string type = s["type"] | "";
+    if (type != "book" && type != "podcast" && type != "episode") continue;
     Shelf next;
     next.id = s["id"] | "";
     next.label = s["label"] | "";
@@ -572,6 +603,7 @@ bool libraryIndex(const std::string& libraryId, AbsIndex& out, std::string& erro
     JsonDocument filter(&psram);
     JsonObject p = filter["mediaProgress"][0].to<JsonObject>();
     p["libraryItemId"] = true;
+    p["episodeId"] = true;  // an episode's progress is not its podcast's
     p["progress"] = true;
     p["isFinished"] = true;
     JsonDocument doc(&psram);
@@ -581,7 +613,7 @@ bool libraryIndex(const std::string& libraryId, AbsIndex& out, std::string& erro
     }
     for (JsonObject entry : doc["mediaProgress"].as<JsonArray>()) {
       const char* id = entry["libraryItemId"] | "";
-      if (!*id) continue;
+      if (!*id || *(entry["episodeId"] | "")) continue;
       progress.push_back({static_cast<uint32_t>(ids.size()), entry["progress"] | 0.0f, entry["isFinished"] | false});
       ids.append(id);
       ids.push_back('\0');
@@ -605,6 +637,7 @@ bool libraryIndex(const std::string& libraryId, AbsIndex& out, std::string& erro
     result["media"]["metadata"]["title"] = true;
     result["media"]["metadata"]["titleIgnorePrefix"] = true;
     result["media"]["metadata"]["authorName"] = true;
+    result["media"]["metadata"]["author"] = true;  // podcasts
     result["media"]["duration"] = true;
     result["media"]["size"] = true;
     JsonDocument doc(&psram);
@@ -626,7 +659,8 @@ bool libraryIndex(const std::string& libraryId, AbsIndex& out, std::string& erro
         finished = at->finished;
       }
       JsonObject metadata = entry["media"]["metadata"];
-      out.add(id, metadata["title"] | "", metadata["titleIgnorePrefix"] | "", metadata["authorName"] | "",
+      out.add(id, metadata["title"] | "", metadata["titleIgnorePrefix"] | "",
+              metadata["authorName"] | (metadata["author"] | ""),
               static_cast<uint32_t>(entry["media"]["duration"] | 0.0), entry["media"]["size"] | 0ull, itemProgress,
               finished);
     }
@@ -636,7 +670,126 @@ bool libraryIndex(const std::string& libraryId, AbsIndex& out, std::string& erro
   return true;
 }
 
+/** One episode as a book of one track (see item()). */
+static bool episodeItem(const std::string& combinedId, ItemDetail& out, std::string& error) {
+  static PsramJsonAllocator psram;
+  const std::string itemId = itemOf(combinedId);
+  const std::string episodeId = combinedId.substr(itemId.size() + 1);
+  Response response;
+  if (!api(HTTP_METHOD_GET, "/api/items/" + itemId + "?expanded=1", "", response, error)) return false;
+  JsonDocument filter(&psram);
+  filter["media"]["metadata"]["title"] = true;
+  filter["media"]["metadata"]["author"] = true;
+  JsonObject episode = filter["media"]["episodes"][0].to<JsonObject>();
+  episode["id"] = true;
+  episode["title"] = true;
+  episode["duration"] = true;
+  episode["audioTrack"]["contentUrl"] = true;
+  episode["audioTrack"]["duration"] = true;
+  episode["audioTrack"]["metadata"]["filename"] = true;
+  episode["audioTrack"]["metadata"]["size"] = true;
+  episode["chapters"][0]["start"] = true;
+  episode["chapters"][0]["title"] = true;
+  JsonDocument doc(&psram);
+  if (deserializeJson(doc, response.body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) {
+    error = "Unexpected reply from the server";
+    return false;
+  }
+  for (JsonObject e : doc["media"]["episodes"].as<JsonArray>()) {
+    if (episodeId != (e["id"] | "")) continue;
+    out = ItemDetail{};
+    out.id = combinedId;
+    out.title = e["title"] | "";
+    out.author = doc["media"]["metadata"]["title"] | "";  // the podcast
+    JsonObject t = e["audioTrack"];
+    Track track;
+    track.index = 1;
+    track.contentUrl = t["contentUrl"] | "";
+    track.filename = t["metadata"]["filename"] | "";
+    track.sizeBytes = t["metadata"]["size"] | 0ull;
+    track.durationMs = static_cast<uint32_t>((t["duration"] | (e["duration"] | 0.0)) * 1000.0);
+    out.durationMs = track.durationMs;
+    if (!track.contentUrl.empty()) out.tracks.push_back(track);
+    for (JsonObject c : e["chapters"].as<JsonArray>()) {
+      out.chapters.push_back({static_cast<uint32_t>((c["start"] | 0.0) * 1000.0), c["title"] | ""});
+    }
+    if (out.tracks.empty()) {
+      error = "This episode has no audio file on the server";
+      return false;
+    }
+    return true;
+  }
+  error = "This episode is no longer on the server";
+  return false;
+}
+
+bool podcast(const std::string& itemId, const size_t maxEpisodes, Podcast& out, std::string& error) {
+  static PsramJsonAllocator psram;
+  Response response;
+  if (!api(HTTP_METHOD_GET, "/api/items/" + itemId + "?expanded=1", "", response, error)) return false;
+  JsonDocument filter(&psram);
+  filter["media"]["metadata"]["title"] = true;
+  filter["media"]["metadata"]["author"] = true;
+  JsonObject episode = filter["media"]["episodes"][0].to<JsonObject>();
+  episode["id"] = true;
+  episode["title"] = true;
+  episode["publishedAt"] = true;
+  episode["duration"] = true;
+  JsonDocument doc(&psram);
+  if (deserializeJson(doc, response.body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) {
+    error = "Unexpected reply from the server";
+    return false;
+  }
+  response = Response{};  // the reply can be large (descriptions); free it before the list is built
+  out = Podcast{};
+  out.id = itemId;
+  out.title = doc["media"]["metadata"]["title"] | "";
+  out.author = doc["media"]["metadata"]["author"] | "";
+
+  // Newest first, then only the first maxEpisodes become strings (small allocations, internal RAM).
+  JsonArray all = doc["media"]["episodes"].as<JsonArray>();
+  out.episodeCount = static_cast<uint32_t>(all.size());
+  std::vector<JsonObject> sorted;
+  sorted.reserve(all.size());
+  for (JsonObject e : all) sorted.push_back(e);
+  std::stable_sort(sorted.begin(), sorted.end(),
+                   [](JsonObject a, JsonObject b) { return (a["publishedAt"] | 0ull) > (b["publishedAt"] | 0ull); });
+  if (sorted.size() > maxEpisodes) sorted.resize(maxEpisodes);
+  for (JsonObject e : sorted) {
+    Episode next;
+    next.id = e["id"] | "";
+    next.title = e["title"] | "";
+    next.publishedMs = e["publishedAt"] | 0ull;
+    next.durationSec = static_cast<uint32_t>(e["duration"] | 0.0);
+    if (!next.id.empty()) out.episodes.push_back(std::move(next));
+  }
+
+  // The user's progress in them, from /api/me (one request; best effort).
+  Response me;
+  std::string ignored;
+  if (out.episodes.empty() || !api(HTTP_METHOD_GET, "/api/me", "", me, ignored)) return true;
+  JsonDocument meFilter(&psram);
+  JsonObject p = meFilter["mediaProgress"][0].to<JsonObject>();
+  p["libraryItemId"] = true;
+  p["episodeId"] = true;
+  p["progress"] = true;
+  p["isFinished"] = true;
+  JsonDocument meDoc(&psram);
+  if (deserializeJson(meDoc, me.body, DeserializationOption::Filter(meFilter)) != DeserializationError::Ok) return true;
+  for (JsonObject entry : meDoc["mediaProgress"].as<JsonArray>()) {
+    if (itemId != (entry["libraryItemId"] | "")) continue;
+    const std::string episodeId = entry["episodeId"] | "";
+    for (Episode& e : out.episodes) {
+      if (e.id != episodeId) continue;
+      e.progress = entry["progress"] | 0.0f;
+      e.finished = entry["isFinished"] | false;
+    }
+  }
+  return true;
+}
+
 bool item(const std::string& itemId, ItemDetail& out, std::string& error) {
+  if (isEpisode(itemId)) return episodeItem(itemId, out, error);
   Response response;
   if (!api(HTTP_METHOD_GET, "/api/items/" + itemId + "?expanded=1", "", response, error)) return false;
   JsonDocument filter;

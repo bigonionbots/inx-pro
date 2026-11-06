@@ -21,8 +21,8 @@
 
 /**
  * Audiobookshelf browser (Audiobooks -> Books -> Audiobookshelf): sign in, pick a library and a
- * book, then stream it or download it for offline listening. Downloads run only while the
- * Download view is showing (see AbsDownloader).
+ * book, then stream it or queue it for download (AbsQueue). In a podcast library, pick a podcast,
+ * then an episode, which streams.
  *
  * Offline first: the libraries, the home shelves and the whole library index (AbsIndex) are
  * cached on the card (AbsLibrary), so the screen shows them at once, browses A-Z / by author /
@@ -54,9 +54,10 @@ class AbsActivity final : public ActivityWithSubactivity {
   /**
    * Home: the shelves, the start view. List: books from the index (A-Z, one author's, search
    * results). Authors: the index's authors. Letters: the A-Z jump grid. More: libraries,
-   * refresh, sign out.
+   * refresh, sign out. Show: a podcast's episodes (in a podcast library the index holds
+   * podcasts, and Detail plays one episode).
    */
-  enum class View : uint8_t { SignIn, More, List, Detail, Download, Home, Authors, Letters };
+  enum class View : uint8_t { SignIn, More, List, Detail, Download, Home, Authors, Letters, Show };
   enum class ListKind : uint8_t { Az, Author, Search };
   enum class Action : uint8_t {
     EditServer,
@@ -89,6 +90,7 @@ class AbsActivity final : public ActivityWithSubactivity {
     QueueDown,
     QueueNow,
     QueueRemove,
+    OpenEpisode,  ///< index = position in show.episodes
   };
   struct Target {
     int x, y, w, h;
@@ -98,8 +100,8 @@ class AbsActivity final : public ActivityWithSubactivity {
 
   const std::function<void()> onClose;
   const std::function<void()> onPlay;
-  std::string resumeId;   ///< a book to open and play as soon as the screen can (Audiobooks page)
-  bool autoPlay = false;  ///< play the book whose details arrive next
+  std::string resumeId;             ///< a book to open and play as soon as the screen can (Audiobooks page)
+  bool autoPlay = false;            ///< play the book whose details arrive next
   bool openDownloads = false;       ///< start on the Downloads page
   int downloadSel = 0;              ///< the selected book on the Downloads page
   View downloadsFrom = View::Home;  ///< where Back from Downloads goes
@@ -151,6 +153,11 @@ class AbsActivity final : public ActivityWithSubactivity {
   TaskHandle_t refreshTask = nullptr;  ///< suspends itself when done; applyRefresh() deletes it
   Abs::ItemDetail detail;
   Abs::Progress serverProgress;
+  // Show view: the podcast open, its first row on screen, rows per page, where Back goes.
+  Abs::Podcast show;
+  int showFirst = 0;
+  int showRows = 1;
+  View showFrom = View::Home;
   bool localCopy = false;
   bool localComplete = false;
   std::vector<std::pair<std::string, bool>> downloaded;  ///< item id, complete
@@ -175,7 +182,11 @@ class AbsActivity final : public ActivityWithSubactivity {
   void rebuildList();
   /** Asks AbsCovers for the whole index's covers (fetched in the background while online). */
   void prefetchCovers();
+  /** A list or shelf entry: a podcast opens its episodes (Show), anything else its Detail page. */
+  void openItem(const std::string& itemId, View from);
+  /** Detail of something playable: a book, or an episode (combined id, Abs::isEpisode()). */
   void openBook(const std::string& itemId, View from);
+  void loadShow(const std::string& itemId, View from);
   void resumeIfAsked();
   /** The open book's page has its details: plays it when autoPlay asked for that. */
   void playIfAsked();
@@ -193,6 +204,7 @@ class AbsActivity final : public ActivityWithSubactivity {
   void renderHome(int y);
   void renderDetail(int y);
   void renderDownload(int y);
+  void renderShow(int y);
   void button(int x, int y, int w, int h, const char* label, Action action, int index = 0, bool filled = false);
   /** The item's cached cover, or a placeholder (noting it for AbsCovers::request()). */
   void drawCover(const std::string& itemId, int x, int y, int size);

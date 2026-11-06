@@ -197,6 +197,15 @@ Listen Again, a few books each with the listening progress. Under them:
 - **Search**: books whose title or author contains every word typed;
 - **More**: switch library, **Refresh**, sign out.
 
+**Podcasts.** A podcast library (`mediaType` "podcast") opens the same way, with its shelves
+(Continue Listening and Newest Episodes are episodes, the others podcasts). A-Z, Authors and
+Search list podcasts; opening one fetches it (`GET /api/items/:id?expanded=1`) and lists its
+newest 100 episodes with date, length and the user's progress, newest first. An episode is
+addressed as `<item id>/<episode id>` everywhere (shelves, the player, the recent list, the local
+progress key `abs:<item>/<episode>`), which is also the tail of its progress routes (`GET`/`PATCH
+/api/me/progress/:id/:episodeId`), so it streams and syncs like a book of one track. Its cover is
+the podcast's. Episodes stream only: they cannot be downloaded yet.
+
 **Offline first.** The libraries, the shelves and the whole library index are cached on the card
 (`AbsLibrary`: `/.system/cache/abs/`), so the screen appears at once and A-Z, Authors and Search
 work with Wi-Fi off; "Offline: showing the saved library" says so, and downloaded books open from

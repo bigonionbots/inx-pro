@@ -189,7 +189,8 @@ bool ensureTask() {
 
 }  // namespace
 
-std::string path(const std::string& itemId) { return std::string(DIRECTORY) + "/" + itemId + ".jpg"; }
+// Covers are per library item: an episode (isEpisode()) shows its podcast's.
+std::string path(const std::string& itemId) { return std::string(DIRECTORY) + "/" + Abs::itemOf(itemId) + ".jpg"; }
 
 bool cached(const std::string& itemId) {
   SdIoMutex::Lock lock;
@@ -198,7 +199,8 @@ bool cached(const std::string& itemId) {
 
 void request(const std::vector<std::string>& itemIds) {
   if (!AbsWifi::connected() || !ensureTask()) return;
-  for (const std::string& id : itemIds) {
+  for (const std::string& entry : itemIds) {
+    const std::string id = Abs::itemOf(entry);
     if (id.empty() || id.size() >= ID_CHARS || pending.count(id) || noCover.count(id) || waitingToRetry(id) ||
         cached(id)) {
       continue;

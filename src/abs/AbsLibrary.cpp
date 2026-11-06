@@ -65,7 +65,7 @@ bool loadLibraries(std::vector<Abs::Library>& out) {
   JsonDocument doc;
   if (data.empty() || deserializeJson(doc, data.data(), data.size()) != DeserializationError::Ok) return false;
   out.clear();
-  for (JsonObject l : doc.as<JsonArray>()) out.push_back({l["id"] | "", l["name"] | ""});
+  for (JsonObject l : doc.as<JsonArray>()) out.push_back({l["id"] | "", l["name"] | "", l["podcasts"] | false});
   return !out.empty();
 }
 
@@ -75,6 +75,7 @@ void saveLibraries(const std::vector<Abs::Library>& libraries) {
     JsonObject o = doc.add<JsonObject>();
     o["id"] = l.id;
     o["name"] = l.name;
+    if (l.podcasts) o["podcasts"] = true;
   }
   writeJson(pathOf("libraries.json"), doc);
 }

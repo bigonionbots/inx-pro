@@ -17,6 +17,7 @@
 
 #if INX_HAS_AUDIO_MODULE
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -30,7 +31,16 @@ namespace Abs {
 struct Library {
   std::string id;
   std::string name;
+  bool podcasts = false;  ///< a podcast library (mediaType "podcast"), else books
 };
+
+/**
+ * A podcast episode is addressed as "<library item id>/<episode id>" throughout (shelves, the
+ * player, the recent list): that is also the tail of its progress routes (/api/me/progress/...).
+ */
+inline bool isEpisode(const std::string& id) { return id.find('/') != std::string::npos; }
+/** The library item of an id: the podcast of an episode, else the id itself (covers are per item). */
+inline std::string itemOf(const std::string& id) { return id.substr(0, id.find('/')); }
 
 struct ItemSummary {
   std::string id;
@@ -42,9 +52,31 @@ struct ItemSummary {
   bool finished = false;
 };
 
-/** A home-page shelf of books (GET /api/libraries/:id/personalized). */
+/** One episode of a podcast, for its episode list. */
+struct Episode {
+  std::string id;  ///< the episode's own id (see isEpisode() for the combined one)
+  std::string title;
+  uint64_t publishedMs = 0;  ///< epoch ms, 0 if unknown
+  uint32_t durationSec = 0;
+  float progress = 0.0f;
+  bool finished = false;
+};
+
+/** A podcast and its newest episodes (GET /api/items/:id?expanded=1). */
+struct Podcast {
+  std::string id;
+  std::string title;
+  std::string author;
+  uint32_t episodeCount = 0;      ///< all of them, also those past the list's limit
+  std::vector<Episode> episodes;  ///< newest first
+};
+
+/**
+ * A home-page shelf (GET /api/libraries/:id/personalized): of books, of podcasts, or of
+ * episodes (their ids combined, isEpisode(); title the episode's, author the podcast's).
+ */
 struct Shelf {
-  std::string id;     ///< continue-listening, continue-series, recently-added, listen-again, ...
+  std::string id;     ///< continue-listening, continue-series, recently-added, newest-episodes, ...
   std::string label;  ///< as the server names it, e.g. "Continue Listening"
   std::vector<ItemSummary> items;
 };
@@ -101,12 +133,16 @@ bool items(const std::string& libraryId, int page, int perPage, std::vector<Item
  * user's progress. Shelves of other things (series, authors) and empty ones are left out.
  */
 bool shelves(const std::string& libraryId, int perShelf, std::vector<Shelf>& out, std::string& error);
+/** A book, or (combined id, isEpisode()) one podcast episode as a book of one track. */
 bool item(const std::string& itemId, ItemDetail& out, std::string& error);
+/** A podcast with its newest `maxEpisodes` episodes and the user's progress in them. */
+bool podcast(const std::string& itemId, size_t maxEpisodes, Podcast& out, std::string& error);
 /**
  * The whole library into `out` (finished), with the user's progress: the items list page by page
  * (GET /api/libraries/:id/items, minified) and /api/me. Any task; no SD.
  */
 bool libraryIndex(const std::string& libraryId, AbsIndex& out, std::string& error);
+/** Progress routes take a combined episode id as is. */
 bool progress(const std::string& itemId, Progress& out, std::string& error);
 bool updateProgress(const std::string& itemId, uint32_t currentMs, uint32_t durationMs, bool finished,
                     std::string& error);
