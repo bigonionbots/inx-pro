@@ -642,6 +642,30 @@ void AudioPlayerActivity::renderBooks(int y) {
   }
 }
 
+int AudioPlayerActivity::paragraph(const int fontId, const int x, int y, const int maxWidth, const std::string& text) {
+  const int lineHeight = renderer.text.getLineHeight(fontId);
+  std::string line;
+  const auto flush = [&] {
+    renderer.text.render(fontId, x, y, renderer.text.truncate(fontId, line.c_str(), maxWidth).c_str());
+    y += lineHeight;
+    line.clear();
+  };
+  for (size_t at = 0; at < text.size();) {
+    const size_t space = text.find(' ', at);
+    const std::string word = text.substr(at, space == std::string::npos ? std::string::npos : space - at);
+    at = space == std::string::npos ? text.size() : space + 1;
+    const std::string candidate = line.empty() ? word : line + " " + word;
+    if (!line.empty() && renderer.text.getWidth(fontId, candidate.c_str()) > maxWidth) {
+      flush();
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  if (!line.empty()) flush();
+  return y;
+}
+
 void AudioPlayerActivity::renderOutput(int y) {
   const AudioPlayer::View v = AudioPlayer::view();
   const AudioLink::ModuleStatus module = AudioLink::status();
@@ -651,9 +675,8 @@ void AudioPlayerActivity::renderOutput(int y) {
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
 
   if (!module.valid) {
-    renderer.text.render(font, MARGIN, y, "Waiting for the audio module...");
-    y += renderer.text.getLineHeight(font) + GAP;
-    renderer.text.render(smallFont, MARGIN, y, "Plug it into the USB-C port.");
+    y = paragraph(font, MARGIN, y, inner, "Waiting for the audio module...") + GAP;
+    paragraph(smallFont, MARGIN, y, inner, "Plug it into the USB-C port.");
     return;
   }
 
@@ -671,8 +694,7 @@ void AudioPlayerActivity::renderOutput(int y) {
                           module.status.btAddress[3] | module.status.btAddress[4] | module.status.btAddress[5];
   std::string state = std::string("Headphones: ") + btStateName(v.btState);
   if (remembered) state += " (" + formatAddress(module.status.btAddress) + ")";
-  renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, state.c_str(), inner).c_str());
-  y += renderer.text.getLineHeight(smallFont) + GAP;
+  y = paragraph(smallFont, MARGIN, y, inner, state) + GAP;
 
   const int halfW = (inner - GAP) / 2;
   button(MARGIN, y, halfW, BUTTON_HEIGHT, scanning ? "Stop scan" : "Scan", Action::ToggleScan, 0, scanning);
@@ -680,8 +702,7 @@ void AudioPlayerActivity::renderOutput(int y) {
   y += BUTTON_HEIGHT + GAP;
 
   if (scanning) {
-    renderer.text.render(smallFont, MARGIN, y, "Put the headphones in pairing mode, then tap them below.");
-    y += renderer.text.getLineHeight(smallFont) + GAP;
+    y = paragraph(smallFont, MARGIN, y, inner, "Put the headphones in pairing mode, then tap them below.") + GAP;
   }
   const auto devices = AudioLink::btDevices();
   const int bottom = renderer.getScreenHeight() - GAP;

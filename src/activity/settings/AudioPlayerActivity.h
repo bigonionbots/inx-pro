@@ -100,6 +100,8 @@ class AudioPlayerActivity final : public Activity {
   void renderChapters(int top);
   void drawCover(const std::string& path, int x, int y, int size);
   int bookRows(int top) const;
+  /** Word-wrapped text from (x, y) within maxWidth; returns the y under its last line. */
+  int paragraph(int fontId, int x, int y, int maxWidth, const std::string& text);
   int listRows() const;
   void button(int x, int y, int w, int h, const char* label, Action action, int index = 0, bool filled = false);
   std::string stateKey() const;

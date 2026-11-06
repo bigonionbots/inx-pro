@@ -33,6 +33,16 @@ constexpr int RESCAN_BOTTOM_MARGIN = 14;
 constexpr int RESCAN_SIDE_MARGIN = 20;
 
 int rescanTop(const int screenHeight) { return screenHeight - RESCAN_BOTTOM_MARGIN - RESCAN_HEIGHT; }
+
+/**
+ * Bottom of the screen kept clear of the network list: the Rescan button and, above it, the two
+ * small lines (networks found, MAC address). Rendering and touch both use it, so rows line up.
+ */
+int listBottomReserve(const GfxRenderer& renderer) {
+  constexpr int INFO_GAP = 8;
+  return RESCAN_BOTTOM_MARGIN + RESCAN_HEIGHT + INFO_GAP + 2 * renderer.text.getLineHeight(MONTSERRAT_8_FONT_ID) +
+         INFO_GAP;
+}
 constexpr uint32_t scanMaxMs = 120;
 // Wi-Fi renders translated labels and may resolve the first non-ASCII glyph by
 // loading a streamed language font. TextRender also uses a bounded glyph buffer
@@ -414,7 +424,7 @@ bool WifiSelectionActivity::handleTouchInput() {
 
   if (state == WifiSelectionState::NETWORK_LIST) {
     const int listStartY = dividerY;
-    const int visibleAreaHeight = screenHeight - listStartY - 80;
+    const int visibleAreaHeight = screenHeight - listStartY - listBottomReserve(renderer);
     const int maxVisibleNetworks = std::max(1, visibleAreaHeight / LIST_ITEM_HEIGHT);
     int scrollOffset = 0;
     if (selectedNetworkIndex >= maxVisibleNetworks) {
@@ -687,14 +697,14 @@ void WifiSelectionActivity::renderNetworkList(int screenWidth, int screenHeight,
   const int dividerY = SubPage::header(renderer, "WiFi Networks");
 
   const int listStartY = dividerY;
-  const int visibleAreaHeight = screenHeight - listStartY - 80;
+  const int visibleAreaHeight = screenHeight - listStartY - listBottomReserve(renderer);
 
   if (networks.empty()) {
     const int centerY = listStartY + (visibleAreaHeight / 2);
     renderer.text.centered(MONTSERRAT_10_FONT_ID, centerY - 20, "No networks found");
     renderer.text.centered(MONTSERRAT_10_FONT_ID, centerY + 10, "Tap Rescan or press Connect to scan again");
   } else {
-    const int maxVisibleNetworks = visibleAreaHeight / LIST_ITEM_HEIGHT;
+    const int maxVisibleNetworks = std::max(1, visibleAreaHeight / LIST_ITEM_HEIGHT);
 
     int scrollOffset = 0;
     if (selectedNetworkIndex >= maxVisibleNetworks) {
@@ -750,8 +760,11 @@ void WifiSelectionActivity::renderNetworkList(int screenWidth, int screenHeight,
 
     char countStr[32];
     snprintf(countStr, sizeof(countStr), LanguageManager::translateText("%zu networks found"), networks.size());
-    renderer.text.render(MONTSERRAT_8_FONT_ID, 20, screenHeight - 90, countStr);
-    renderer.text.render(MONTSERRAT_8_FONT_ID, 20, screenHeight - 105, cachedMacAddress.c_str());
+    // Just above the Rescan button: the count, and the MAC address over it.
+    const int infoLine = renderer.text.getLineHeight(MONTSERRAT_8_FONT_ID);
+    const int countY = rescanTop(screenHeight) - 8 - infoLine;
+    renderer.text.render(MONTSERRAT_8_FONT_ID, 20, countY, countStr);
+    renderer.text.render(MONTSERRAT_8_FONT_ID, 20, countY - infoLine, cachedMacAddress.c_str());
   }
 
   // Rescan: networks come and go (a phone hotspot switched on after the scan, say).
