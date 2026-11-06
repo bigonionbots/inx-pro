@@ -120,8 +120,14 @@ unsigned char jpegReadCallback(unsigned char* pBuf, unsigned char bufSize, unsig
   return 0;
 }
 
-bool scanJpegHeader(FsFile& file, int* outWidth = nullptr, int* outHeight = nullptr,
-                    bool* outProgressive = nullptr) {
+/**
+ * Reads the frame header. outPicoSampling (optional): whether picojpeg can decode its layout,
+ * which is its own rule (picojpeg.c): grey, or three components whose chroma are 1x1 and whose
+ * luma is 1x1, 1x2, 2x1 or 2x2. ffmpeg writes some covers as three 1x2 components (no
+ * subsampling, 8x16 blocks), which picojpeg refuses; stb_image decodes them.
+ */
+bool scanJpegHeader(FsFile& file, int* outWidth = nullptr, int* outHeight = nullptr, bool* outProgressive = nullptr,
+                    bool* outPicoSampling = nullptr) {
   const uint32_t originalPos = file.position();
   file.seek(0);
 
@@ -175,6 +181,26 @@ bool scanJpegHeader(FsFile& file, int* outWidth = nullptr, int* outHeight = null
       if (outWidth) *outWidth = width;
       if (outHeight) *outHeight = height;
       if (outProgressive) *outProgressive = marker == 0xC2 || marker == 0xC9 || marker == 0xCA;
+      if (outPicoSampling) {
+        uint8_t components = 0;
+        uint8_t sampling[4] = {};
+        bool read = nextByte(components) && components >= 1 && components <= 4;
+        for (uint8_t c = 0; read && c < components; ++c) {
+          uint8_t id;
+          uint8_t tq;
+          read = nextByte(id) && nextByte(sampling[c]) && nextByte(tq);
+        }
+        const auto h = [&](int c) { return sampling[c] >> 4; };
+        const auto v = [&](int c) { return sampling[c] & 0x0F; };
+        bool supported = false;
+        if (read && components == 1) {
+          supported = true;
+        } else if (read && components == 3) {
+          supported =
+              h(1) == 1 && v(1) == 1 && h(2) == 1 && v(2) == 1 && h(0) >= 1 && h(0) <= 2 && v(0) >= 1 && v(0) <= 2;
+        }
+        *outPicoSampling = supported;
+      }
       foundSof = true;
       break;
     }
@@ -191,10 +217,12 @@ bool scanJpegHeader(FsFile& file, int* outWidth = nullptr, int* outHeight = null
   return foundSof;
 }
 
+/** Needs the stb_image path: progressive, or a sampling layout picojpeg refuses. */
 bool isUnsupportedJpeg(FsFile& file) {
   bool progressive = false;
-  scanJpegHeader(file, nullptr, nullptr, &progressive);
-  return progressive;
+  bool picoSampling = true;
+  scanJpegHeader(file, nullptr, nullptr, &progressive, &picoSampling);
+  return progressive || !picoSampling;
 }
 
 inline uint8_t grayFromRgb(uint8_t r, uint8_t g, uint8_t b) {
