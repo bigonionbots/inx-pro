@@ -32,7 +32,13 @@ bool cached(const std::string& itemId);
 /** Fetches the covers of these items that are not cached or already asked for. Main loop. */
 void request(const std::vector<std::string>& itemIds);
 
-/** Drops requests not started yet (leaving a screen). */
+/**
+ * Fetches these items' covers in the background, a few at a time, while Wi-Fi is up (replaces an
+ * earlier list). Cached ones are skipped as they come up. Main loop.
+ */
+void prefetch(const std::vector<std::string>& itemIds);
+
+/** Drops requests not started yet and the prefetch (leaving the screen). */
 void cancel();
 
 /** Writes fetched covers to the card. Main loop (main.cpp, every loop). */

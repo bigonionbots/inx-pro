@@ -212,8 +212,12 @@ once, as a 240 px wide JPEG the server scales (`/api/items/:id/cover?width=240&f
 kept in `/.system/cache/abs-covers/<item id>.jpg`, so it draws from the card at once and offline.
 `AbsCovers` fetches missing ones on a long-lived task over one kept-alive connection (one TLS
 handshake for a screenful), only while Wi-Fi is already up; the main loop writes them to the card,
-and the screen redraws at most every 2 s while they arrive. Until then a dotted square stands in.
-A book with no cover keeps the square; delete the folder to fetch them all again.
+and the screen redraws (at most every 2 s) when one it shows a placeholder for arrives. Until then
+a dotted square stands in. Besides what is on screen, the whole library's missing covers are
+prefetched in the background, four at a time, while the screen is open and Wi-Fi is up. A book
+the server has no cover for (404) keeps the square until the next boot; any other failure (a
+dropped connection is retried at once on a new one) is tried again after a minute. Delete the
+folder to fetch them all again.
 
 **Now Playing** shows the book's cover at the top left, with the title and chapter beside it. An
 Audiobookshelf book uses the cached cover above (fetched when it opens, if online); a local book

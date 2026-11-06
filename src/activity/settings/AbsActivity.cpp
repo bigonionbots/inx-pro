@@ -119,9 +119,18 @@ bool AbsActivity::showCached() {
   AbsLibrary::loadShelves(library.id, shelves);
   index.clear();
   AbsLibrary::loadIndex(library.id, index);
+  prefetchCovers();
   showView(View::Home);
   startRefresh(false);
   return true;
+}
+
+void AbsActivity::prefetchCovers() {
+  // The whole library, in title order, so A-Z and Authors have them before they are opened.
+  std::vector<std::string> ids;
+  ids.reserve(index.size());
+  for (const uint32_t b : index.byTitle()) ids.emplace_back(index.text(index.book(b).id));
+  AbsCovers::prefetch(ids);
 }
 
 void AbsActivity::startRefresh(const bool force) {
@@ -207,6 +216,7 @@ void AbsActivity::applyRefresh() {
     indexFetchedFor = library.id;
     indexFetchedMs = millis();
     rebuildList();  // the book numbers changed with the index
+    prefetchCovers();
   }
   stagedLibraries.clear();
   stagedShelves.clear();
@@ -520,8 +530,15 @@ void AbsActivity::loop() {
     if (mappedInput.wasPressed(MappedInputManager::Button::Down)) run(Action::PageDown, 0);
   }
 
-  const bool coversArrived = AbsCovers::changeCounter() != renderedCovers;
-  const bool coverTick = coversArrived && !busy && millis() - lastRenderMs >= COVER_REDRAW_MS;
+  // Covers arrive in the background (most of the library is prefetched): redraw only when one
+  // this screen shows a placeholder for is now on the card, not for every one written.
+  bool coversArrived = false;
+  if (AbsCovers::changeCounter() != renderedCovers && millis() - lastRenderMs >= COVER_REDRAW_MS) {
+    renderedCovers = AbsCovers::changeCounter();
+    coversArrived = std::any_of(missingCovers.begin(), missingCovers.end(),
+                                [](const std::string& id) { return AbsCovers::cached(id); });
+  }
+  const bool coverTick = coversArrived && !busy;
   const bool downloadTick = view == View::Download && millis() - lastRenderMs >= DOWNLOAD_REDRAW_MS;
   if (updateRequired || downloadTick || coverTick) {
     updateRequired = false;
@@ -723,6 +740,14 @@ void AbsActivity::drawCover(const std::string& itemId, const int x, const int y,
     ImageRender::Options options;
     options.cropToFill = true;  // square, whatever the cover's shape
     if (ImageRender::create(renderer, AbsCovers::path(itemId)).render(x, y, size, size, options)) return;
+    // On the card but not drawable: say so (once per id), since nothing fetches it again.
+    static std::vector<std::string> reported;
+    if (std::find(reported.begin(), reported.end(), itemId) == reported.end()) {
+      reported.push_back(itemId);
+      INX_SERIAL.printf("[ABSCOVER] %s: cached, but the image did not render\n", itemId.c_str());
+    }
+    renderer.rectangle.dotted(x, y, size, size, true);
+    return;
   }
   renderer.rectangle.dotted(x, y, size, size, true);
   missingCovers.push_back(itemId);

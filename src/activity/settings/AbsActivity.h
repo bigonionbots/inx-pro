@@ -160,6 +160,8 @@ class AbsActivity final : public ActivityWithSubactivity {
   void deleteRefreshTask();
   void openList(ListKind kind, const std::string& key);
   void rebuildList();
+  /** Asks AbsCovers for the whole index's covers (fetched in the background while online). */
+  void prefetchCovers();
   void openBook(const std::string& itemId, View from);
   void resumeIfAsked();
   /** The open book's page has its details: plays it when autoPlay asked for that. */
