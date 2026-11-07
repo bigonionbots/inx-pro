@@ -1397,16 +1397,17 @@ void AbsActivity::renderDownload(int y) {
     switch (e.state) {
       case AbsQueue::State::Downloading:
         if (s.itemId == e.itemId && s.totalBytes) {
-          char line[96];
-          snprintf(line, sizeof(line), "Downloading %d%%  -  %s of %s",
+          // Speed first, so it survives truncation: "DL 270 k/s 45%  -  ...".
+          char speed[24] = "";
+          if (s.bytesPerSecond) snprintf(speed, sizeof(speed), "%.0f k/s ", s.bytesPerSecond / 1024.0);
+          char line[128];
+          snprintf(line, sizeof(line), "DL %s%d%%  -  %s of %s", speed,
                    static_cast<int>(100 * s.doneBytes / s.totalBytes), formatMb(s.doneBytes).c_str(),
                    formatMb(s.totalBytes).c_str());
           state = line;
           if (s.bytesPerSecond) {
             const uint64_t left = s.totalBytes > s.doneBytes ? s.totalBytes - s.doneBytes : 0;
-            snprintf(line, sizeof(line), "  -  %.0f KB/s, %s left", s.bytesPerSecond / 1024.0,
-                     formatDuration(static_cast<uint32_t>(left / s.bytesPerSecond)).c_str());
-            state += line;
+            state += "  -  " + formatDuration(static_cast<uint32_t>(left / s.bytesPerSecond)) + " left";
           }
         } else {
           state = "Downloading...";
