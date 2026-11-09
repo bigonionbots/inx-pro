@@ -14,6 +14,9 @@
 #include <qrcode.h>
 
 #include "activity/page/SubPage.h"
+#if INX_HAS_AUDIO_MODULE
+#include "system/AudioPlayer.h"
+#endif
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
 #include "system/ScreenComponents.h"
@@ -62,7 +65,7 @@ std::string truncateString(const std::string& str, int maxLength) {
   result.replace(maxLength - 3, result.length() - (maxLength - 3), "...");
   return result;
 }
-}
+}  // namespace
 
 /**
  * @brief Static trampoline function for FreeRTOS task creation
@@ -84,6 +87,12 @@ void HotspotActivity::onEnter() {
   renderingMutex = xSemaphoreCreateMutex();
   updateRequired = true;
   state = HotspotState::STARTING;
+
+#if INX_HAS_AUDIO_MODULE
+  // As on Manage via WiFi: a playing book pauses and its stream lets go (it needs a network the
+  // hotspot replaces), and plays again on leaving, once Wi-Fi reconnects.
+  resumeAudio = AudioPlayer::suspendForScreen();
+#endif
 
   xTaskCreateWithCaps(&HotspotActivity::taskTrampoline, "HotspotTask", STACK_SIZE, this, 1, &displayTaskHandle,
                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -109,6 +118,11 @@ void HotspotActivity::onExit() {
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_OFF);
   delay(30);
+
+#if INX_HAS_AUDIO_MODULE
+  AudioPlayer::resumeAfterScreen(resumeAudio, false);  // the stream joins a saved network itself
+  resumeAudio = false;
+#endif
 
   if (displayTaskHandle) {
     vTaskDeleteWithCaps(displayTaskHandle);

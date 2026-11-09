@@ -116,6 +116,14 @@ void logf(const char* format, ...) __attribute__((format(printf, 1, 2)));
 /** The newest log lines, oldest first. */
 std::vector<std::string> recentLog(size_t maxLines);
 
+/** Where saveLog() writes, in the card's root so the web file manager lists it. */
+constexpr const char* LOG_FILE = "/audio-log.txt";
+/**
+ * Writes the log history (the last ~64 KB of lines since boot, kept in PSRAM, with full uptime
+ * stamps) to LOG_FILE, replacing it. False if the card could not be written. Main loop (SD).
+ */
+bool saveLog();
+
 /** Increments whenever the snapshot or the log changes, so the screen knows when to redraw. */
 uint32_t changeCounter();
 

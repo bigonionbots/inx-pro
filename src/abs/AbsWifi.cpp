@@ -59,6 +59,13 @@ bool hasSavedNetworks() {
 
 bool connected() { return WiFi.status() == WL_CONNECTED; }
 
+/**
+ * The T5 runs its own hotspot (HotspotActivity, AP mode). Joining a network would switch the radio
+ * to station mode and take the hotspot down under whoever is connected to it, and a failed join
+ * turned Wi-Fi off altogether: leave the radio alone while it lasts.
+ */
+bool hotspotActive() { return (WiFi.getMode() & WIFI_MODE_AP) != 0; }
+
 bool acquire(std::string& error) {
   ensureLock();
   xSemaphoreTakeRecursive(lock, portMAX_DELAY);
@@ -66,6 +73,11 @@ bool acquire(std::string& error) {
     ++users;
     xSemaphoreGiveRecursive(lock);
     return true;
+  }
+  if (hotspotActive()) {
+    xSemaphoreGiveRecursive(lock);
+    error = "Wi-Fi is in hotspot mode";
+    return false;
   }
   if (networks.empty()) {
     xSemaphoreGiveRecursive(lock);
@@ -106,7 +118,7 @@ void adopt() {
 void offIfUnused() {
   ensureLock();
   xSemaphoreTakeRecursive(lock, portMAX_DELAY);
-  if (users == 0) {
+  if (users == 0 && !hotspotActive()) {
     WiFi.disconnect(false);
     WiFi.mode(WIFI_OFF);
     turnedOn = false;
@@ -119,8 +131,11 @@ void release() {
   xSemaphoreTakeRecursive(lock, portMAX_DELAY);
   if (users > 0) --users;
   if (users == 0 && turnedOn) {
-    WiFi.disconnect(false);
-    WiFi.mode(WIFI_OFF);
+    // Not under a hotspot started since: that is its screen's to turn off.
+    if (!hotspotActive()) {
+      WiFi.disconnect(false);
+      WiFi.mode(WIFI_OFF);
+    }
     turnedOn = false;
   }
   xSemaphoreGiveRecursive(lock);

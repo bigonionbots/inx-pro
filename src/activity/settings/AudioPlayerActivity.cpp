@@ -27,6 +27,7 @@
 extern void onGoToAudiobookshelf();
 extern void onResumeAudiobookshelf(const std::string& itemId);
 extern void onOpenAbsDownloads();
+extern void onGoToAudioModule();
 
 namespace {
 
@@ -263,6 +264,9 @@ void AudioPlayerActivity::run(const Action action, const int index) {
     case Action::ShowOutput:
       showView(View::Output);
       return;
+    case Action::ShowAudioModule:
+      onGoToAudioModule();
+      return;
     case Action::ShowAudiobookshelf:
       onGoToAudiobookshelf();
       return;
@@ -379,6 +383,8 @@ void AudioPlayerActivity::renderNowPlaying(int y) {
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Choose a book", Action::ShowBooks);
     y += BUTTON_HEIGHT + GAP;
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Audio output", Action::ShowOutput);
+    y += BUTTON_HEIGHT + GAP;
+    button(MARGIN, y, inner, BUTTON_HEIGHT, "Audio module", Action::ShowAudioModule);
     return;
   }
 
@@ -498,12 +504,18 @@ void AudioPlayerActivity::renderNowPlaying(int y) {
   }
   button(MARGIN, y, inner, BUTTON_HEIGHT, output, Action::ShowOutput);
   y += BUTTON_HEIGHT + GAP;
-  if (chaptered) {
-    const int half = (inner - GAP) / 2;
-    button(MARGIN, y, half, BUTTON_HEIGHT, "Chapters", Action::ShowChapters);
-    button(MARGIN + half + GAP, y, inner - half - GAP, BUTTON_HEIGHT, "Books", Action::ShowBooks);
-  } else {
-    button(MARGIN, y, inner, BUTTON_HEIGHT, "Books", Action::ShowBooks);
+  // Chapters (when the book has them), Books, and the audio module's page (Device Management).
+  {
+    const int columns = chaptered ? 3 : 2;
+    const int w = (inner - (columns - 1) * GAP) / columns;
+    int x = MARGIN;
+    if (chaptered) {
+      button(x, y, w, BUTTON_HEIGHT, "Chapters", Action::ShowChapters);
+      x += w + GAP;
+    }
+    button(x, y, w, BUTTON_HEIGHT, "Books", Action::ShowBooks);
+    x += w + GAP;
+    button(x, y, MARGIN + inner - x, BUTTON_HEIGHT, "Module", Action::ShowAudioModule);
   }
   y += BUTTON_HEIGHT + 2 * GAP;
 

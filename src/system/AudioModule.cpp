@@ -9,7 +9,9 @@
 
 #include <Arduino.h>
 #include <BoardConfig.h>
+#include <SDCardManager.h>
 #include <Wire.h>
+#include <esp_heap_caps.h>
 
 #include <algorithm>
 #include <atomic>
@@ -18,8 +20,10 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <string>
 
 #include "AudioLink.h"
+#include "util/SdIoMutex.h"
 
 namespace AudioModule {
 
@@ -40,6 +44,28 @@ constexpr uint32_t LINK_IDLE_TIMEOUT_MS = 800;
 
 std::mutex logMutex;
 std::deque<std::string> logLines;
+/**
+ * The longer history for saveLog(): a ring of the last LOG_HISTORY_BYTES of lines in PSRAM
+ * (logMutex). Allocated with the first line; without PSRAM there is only the screen's log.
+ */
+constexpr size_t LOG_HISTORY_BYTES = 64 * 1024;
+char* logHistory = nullptr;
+size_t logHistoryHead = 0;  // where the next byte goes
+bool logHistoryWrapped = false;
+
+void appendHistory(const char* text, const size_t length) {
+  if (!logHistory) {
+    logHistory = static_cast<char*>(heap_caps_malloc(LOG_HISTORY_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!logHistory) return;
+  }
+  for (size_t i = 0; i < length; ++i) {
+    logHistory[logHistoryHead++] = text[i];
+    if (logHistoryHead == LOG_HISTORY_BYTES) {
+      logHistoryHead = 0;
+      logHistoryWrapped = true;
+    }
+  }
+}
 std::atomic<uint32_t> changes{0};
 
 bool chargerOk = false;
@@ -351,10 +377,18 @@ void logf(const char* format, ...) {
   snprintf(line, sizeof(line), "%02lu:%02lu %s", static_cast<unsigned long>(seconds / 60 % 100),
            static_cast<unsigned long>(seconds % 60), text);
   INX_SERIAL.printf("[AUDIO] %s\n", line);
+  // The saved history has the full uptime, h:mm:ss.mmm, as the screen's minutes wrap at 100.
+  const uint32_t ms = millis();
+  char stamped[352];
+  const int stampedLength =
+      snprintf(stamped, sizeof(stamped), "%lu:%02lu:%02lu.%03lu %s\n", static_cast<unsigned long>(ms / 3600000),
+               static_cast<unsigned long>(ms / 60000 % 60), static_cast<unsigned long>(ms / 1000 % 60),
+               static_cast<unsigned long>(ms % 1000), text);
   {
     std::lock_guard<std::mutex> guard(logMutex);
     logLines.emplace_back(line);
     while (logLines.size() > LOG_LINES) logLines.pop_front();
+    if (stampedLength > 0) appendHistory(stamped, std::min(static_cast<size_t>(stampedLength), sizeof(stamped) - 1));
   }
   markChanged();
 }
@@ -363,6 +397,32 @@ std::vector<std::string> recentLog(const size_t maxLines) {
   std::lock_guard<std::mutex> guard(logMutex);
   const size_t count = std::min(maxLines, logLines.size());
   return std::vector<std::string>(logLines.end() - static_cast<std::ptrdiff_t>(count), logLines.end());
+}
+
+bool saveLog() {
+  // Copy out first (PSRAM), so loggers on other tasks wait for a memcpy, not for the card.
+  std::string text;
+  {
+    std::lock_guard<std::mutex> guard(logMutex);
+    if (logHistory) {
+      if (logHistoryWrapped) {
+        text.assign(logHistory + logHistoryHead, LOG_HISTORY_BYTES - logHistoryHead);
+        const size_t firstLine = text.find('\n');  // the oldest line was cut by the wrap
+        text.erase(0, firstLine == std::string::npos ? text.size() : firstLine + 1);
+      }
+      text.append(logHistory, logHistoryHead);
+    }
+  }
+  char header[96];
+  const int headerLength = snprintf(header, sizeof(header), "Inx Pro %s audio log, saved at uptime %lu s\n\n",
+                                    INX_VERSION, static_cast<unsigned long>(millis() / 1000));
+  SdIoMutex::Lock lock;
+  FsFile file = SdMan.open(LOG_FILE, O_WRONLY | O_CREAT | O_TRUNC);
+  if (!file) return false;
+  bool ok = file.write(header, headerLength) == static_cast<size_t>(headerLength);
+  ok = ok && file.write(text.data(), text.size()) == text.size();
+  file.close();
+  return ok;
 }
 
 uint32_t changeCounter() { return changes.load(); }

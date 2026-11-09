@@ -5,9 +5,9 @@
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
-#include <ImageDisplayCache.h>
 #include <HalDisplay.h>
 #include <HalGPIO.h>
+#include <ImageDisplayCache.h>
 #include <SDCardManager.h>
 #include <SPI.h>
 #if FREEINK_DEVICE_X4PRO
@@ -17,8 +17,8 @@
 #include <esp_system.h>
 #endif
 
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <new>
 #include <string>
@@ -29,21 +29,21 @@
 #include "activity/network/CalibreConnectActivity.h"
 #include "activity/network/HotspotActivity.h"
 #include "activity/network/LocalNetworkActivity.h"
-#include "activity/page/Library.h"
+#include "activity/page/HeatmapReport.h"
 #include "activity/page/Home.h"
 #include "activity/page/HomeSubPage.h"
+#include "activity/page/Library.h"
 #include "activity/page/Search.h"
 #include "activity/page/Settings.h"
 #include "activity/page/Statistics.h"
-#include "activity/page/HeatmapReport.h"
 #include "activity/page/SyncActivity.h"
-#include "activity/settings/StoreActivity.h"
 #include "activity/reader/ImageViewerActivity.h"
 #include "activity/reader/ReaderActivity.h"
+#include "activity/settings/StoreActivity.h"
 #include "activity/system/BootActivity.h"
 #include "activity/system/SleepActivity.h"
-#include "activity/util/KeyboardEntryActivity.h"
 #include "activity/util/FullScreenMessageActivity.h"
+#include "activity/util/KeyboardEntryActivity.h"
 #include "state/ReaderSetting.h"
 #include "state/SystemSetting.h"
 #if INX_HAS_GAMES
@@ -56,17 +56,18 @@
 #include "abs/AbsQueue.h"
 #include "abs/AbsWifi.h"
 #include "activity/settings/AbsActivity.h"
+#include "activity/settings/AudioModuleActivity.h"
 #include "activity/settings/AudioPlayerActivity.h"
 #include "system/AudioLink.h"
 #include "system/AudioModule.h"
 #include "system/AudioPlayer.h"
 #endif
 #include "system/FontManager.h"
-#include "system/Frontlight.h"
 #include "system/Fonts.h"
-#include "system/ScreenComponents.h"
+#include "system/Frontlight.h"
 #include "system/MappedInputManager.h"
 #include "system/PluginManager.h"
+#include "system/ScreenComponents.h"
 #include "util/LibraryIndexRefresh.h"
 #include "util/StringUtils.h"
 
@@ -118,7 +119,7 @@ bool handleGlobalPowerRefresh();
 namespace {
 constexpr unsigned long kPowerDownRestartHoldMs = 2000;
 constexpr unsigned long kPowerLongPressMs = 400;
-}
+}  // namespace
 
 template <typename T>
 auto storeSwitchArgument(T&& value) {
@@ -152,11 +153,8 @@ void switchTo(Args&&... args) {
   if (activityLoopRunning) {
     auto stored = std::make_tuple(storeSwitchArgument(std::forward<Args>(args))...);
     deferredActivitySwitch = [stored = std::move(stored)]() mutable {
-      std::apply(
-          [](auto&&... values) {
-            switchTo<T>(useSwitchArgument(std::forward<decltype(values)>(values))...);
-          },
-          std::move(stored));
+      std::apply([](auto&&... values) { switchTo<T>(useSwitchArgument(std::forward<decltype(values)>(values))...); },
+                 std::move(stored));
     };
     return;
   }
@@ -182,9 +180,7 @@ void switchTo(Args&&... args) {
 }
 
 /** @brief Navigates to the new empty Home page. */
-void onGoToHome() {
-  switchTo<Home>(render, input);
-}
+void onGoToHome() { switchTo<Home>(render, input); }
 
 void openSearchFromCallback(std::function<void()> returnToCaller) {
   switchTo<Search>(render, input, std::move(returnToCaller));
@@ -212,11 +208,12 @@ void openReaderFromCallback(const std::string& path, std::function<void()> retur
     switchTo<ImageViewerActivity>(render, input, pathCopy, std::move(returnToCaller));
     return;
   }
-  switchTo<ReaderActivity>(render, input, pathCopy,
-                           [returnToCaller](const std::string&) {
-                             if (returnToCaller) returnToCaller();
-                           },
-                           spineIndex, pageNumber);
+  switchTo<ReaderActivity>(
+      render, input, pathCopy,
+      [returnToCaller](const std::string&) {
+        if (returnToCaller) returnToCaller();
+      },
+      spineIndex, pageNumber);
 }
 
 /**
@@ -248,6 +245,11 @@ void onGoToGames() {
 }
 #endif
 
+/** The Audio module page (Device Management), from the player; back returns to the player. */
+void onGoToAudioModule() {
+  switchTo<AudioModuleActivity>(render, input, [] { onGoToAudiobooks(); });
+}
+
 void onGoToAudiobookshelf() {
   switchTo<AbsActivity>(render, input, [] { onGoToAudiobooks(); }, [] { onGoToAudiobooks(); });
 }
@@ -268,8 +270,8 @@ void openHomeSubPage(const HomeSubPage::Section section) {
 }
 
 void openHomeDescription(const std::string& bookPath, const std::string& cachePath) {
-  switchTo<HomeSubPage>(render, input, HomeSubPage::Section::Description, [] { onGoToHome(); }, "", bookPath,
-                        cachePath);
+  switchTo<HomeSubPage>(
+      render, input, HomeSubPage::Section::Description, [] { onGoToHome(); }, "", bookPath, cachePath);
 }
 
 void openDictionaryLookup(const std::string& word) {
@@ -488,7 +490,7 @@ void loop() {
 
   if (powerPressed || powerReleased) {
     INX_SERIAL.printf("[STICKY][MAIN] power pressed=%d released=%d activity=%s\n", powerPressed ? 1 : 0,
-                   powerReleased ? 1 : 0, currentActivity ? currentActivity->getName() : "none");
+                      powerReleased ? 1 : 0, currentActivity ? currentActivity->getName() : "none");
   }
 
 #if INX_HAS_AUDIO_MODULE

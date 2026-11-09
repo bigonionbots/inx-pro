@@ -21,7 +21,7 @@
 
 namespace {
 
-constexpr int ACTION_COUNT = 3;
+constexpr int ACTION_COUNT = 4;
 constexpr int ROW_HEIGHT = UiLayout::LIST_ITEM_HEIGHT;
 constexpr unsigned long MIN_REDRAW_MS = 1000;
 
@@ -105,6 +105,13 @@ void AudioModuleActivity::runAction(const int index) {
     case 2:
       AudioModule::runLinkTest();
       break;
+    case 3:
+      if (AudioModule::saveLog()) {
+        AudioModule::logf("Log saved to %s", AudioModule::LOG_FILE);
+      } else {
+        AudioModule::logf("Log: could not write %s", AudioModule::LOG_FILE);
+      }
+      break;
     default:
       break;
   }
@@ -124,8 +131,8 @@ void AudioModuleActivity::render() {
   const int font = systemFontId();
   constexpr int smallFont = MONTSERRAT_8_FONT_ID;
 
-  const char* labels[ACTION_COUNT] = {"Module power", "USB link", "Link test"};
-  const char* values[ACTION_COUNT] = {snap.powerOn ? "On" : "Off", snap.linkOn ? "On" : "Off", "›"};
+  const char* labels[ACTION_COUNT] = {"Module power", "USB link", "Link test", "Save log to SD card"};
+  const char* values[ACTION_COUNT] = {snap.powerOn ? "On" : "Off", snap.linkOn ? "On" : "Off", "›", "›"};
   for (int i = 0; i < ACTION_COUNT; ++i) {
     const int rowY = actionsTop + i * ROW_HEIGHT;
     const bool selected = selectedVisible && i == selectedIndex;

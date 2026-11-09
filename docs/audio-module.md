@@ -259,6 +259,24 @@ handshake each (about a second through a Cloudflare tunnel), held streaming to ~
 playback stop to buffer. A progress sync's check, save and read-back share one connection
 (`Abs::KeepConnection`), closed when the sync is done.
 
+**Pacing.** After its first 256 KB the stream is read at a steady 48 KB/s (three times a
+128 kbit/s audiobook) instead of each 128 KB block at full speed. The full-speed bursts stuttered
+Bluetooth output: the module's radio sits a few centimetres from the T5's Wi-Fi, and its PCM ring
+holds only ~46 ms, so a stall during a burst was an underrun (a downloaded book with Wi-Fi off
+played cleanly). The player logs a `Stream:` line every 20 s while streaming (rate in, both
+buffers, module underruns, decode errors and heap, connections and block fetches); Device
+Management -> Audio Module -> Save log to SD card writes the log history to `/audio-log.txt`.
+The Audio module page is also one tap from the player (Module, next to Books).
+
+**Skips.** The feeder keeps the last track's parsed source and its cached blocks, so a skip or
+seek in the same file only seeks and opens one stream. Reading an MP4 header and its tables over
+fresh connections took 12-17 s per skip on an 18-hour .m4b. Each stream start logs a `Feed:` line
+(Wi-Fi, open/header and seek times).
+
+**Link.** A frame USB will not take (`UsbSerialHost::write` fails) is resent after 20 ms rather
+than at the 1 s resend timeout, which is longer than the module's buffers last; the `Stream:`
+line counts resends, write errors and bad frames.
+
 **Internal RAM.** Every open HTTP client holds its buffers until it closes, and `malloc()` serves
 blocks of 4 KB or less (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`) from internal RAM. With 4 KB
 buffers, a stream, a sync and a stale stream open together left 4-6 KB of internal RAM, and USB
@@ -268,7 +286,8 @@ buffers, a stream, a sync and a stale stream open together left 4-6 KB of intern
 Underneath, the same
 `Mp3Source`/`Mp4Source` readers run on a feeder task, so a streamed book needs no SD access.
 Network errors are retried. If retries fail, playback restarts from the current position after
-5 s. Wi-Fi stays on while streaming, but a streamed book paused for 3 minutes stops its stream
+5 s. Wi-Fi stays on while streaming, and for 20 s after a stream ends, so a skip or seek reuses
+the connection; but a streamed book paused for 3 minutes stops its stream
 and lets Wi-Fi go ("Wi-Fi off while paused"); Play reconnects with the saved networks and
 restarts it at the same place ("Reconnecting Wi-Fi..." until it plays).
 

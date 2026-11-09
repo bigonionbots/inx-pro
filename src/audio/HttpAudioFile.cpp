@@ -13,6 +13,7 @@
 #include <esp_http_client.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 
@@ -23,6 +24,10 @@ namespace {
 constexpr int ATTEMPTS = 4;
 constexpr uint32_t FIRST_RETRY_DELAY_MS = 1000;
 constexpr int HTTP_TIMEOUT_MS = 15000;
+/** See HttpAudioFile.h: three times a 128 kbit/s audiobook, above a 320 kbit/s podcast. */
+constexpr uint32_t STREAM_PACE_BYTES_PER_S = 48 * 1024;
+constexpr uint64_t STREAM_FAST_START_BYTES = 256 * 1024;
+constexpr size_t STREAM_READ_BYTES = 4096;  // pacing granularity
 
 struct HeaderCapture {
   uint64_t totalSize = 0;
@@ -38,7 +43,13 @@ esp_err_t onHttpEvent(esp_http_client_event_t* event) {
   return ESP_OK;
 }
 
+std::atomic<uint32_t> streamOpens{0};
+std::atomic<uint32_t> streamDrops{0};
+std::atomic<uint32_t> rangeFetches{0};
+
 }  // namespace
+
+HttpAudioFile::Stats HttpAudioFile::stats() { return {streamOpens.load(), streamDrops.load(), rangeFetches.load()}; }
 
 HttpAudioFile::HttpAudioFile(std::string url) : url_(std::move(url)) {}
 
@@ -90,6 +101,7 @@ bool HttpAudioFile::openStream(const uint64_t start) {
       }
       stream_ = client;
       streamPos_ = start;
+      ++streamOpens;
       return true;
     }
     esp_http_client_close(client);
@@ -105,10 +117,22 @@ bool HttpAudioFile::openStream(const uint64_t start) {
 
 bool HttpAudioFile::readStream(Block& into, const size_t length) {
   size_t got = 0;
+  const uint32_t startedMs = millis();
+  size_t paced = 0;  // bytes of this block read under pacing
   while (got < length && !cancelled_) {
-    const int n = esp_http_client_read(stream_, reinterpret_cast<char*>(into.data) + got, length - got);
+    const bool pace = streamedBytes_ >= STREAM_FAST_START_BYTES;
+    const size_t want = pace ? std::min(length - got, STREAM_READ_BYTES) : length - got;
+    const int n = esp_http_client_read(stream_, reinterpret_cast<char*>(into.data) + got, want);
     if (n <= 0) break;
     got += static_cast<size_t>(n);
+    streamedBytes_ += static_cast<size_t>(n);
+    if (!pace) continue;
+    paced += static_cast<size_t>(n);
+    // Wait until this block's paced bytes are due at the pace (in short steps: cancel stays quick).
+    const uint32_t dueMs = static_cast<uint32_t>(static_cast<uint64_t>(paced) * 1000 / STREAM_PACE_BYTES_PER_S);
+    while (!cancelled_ && millis() - startedMs < dueMs) {
+      vTaskDelay(pdMS_TO_TICKS(std::min<uint32_t>(20, dueMs - (millis() - startedMs))));
+    }
   }
   into.length = got;
   if (got == length || (size_ && streamPos_ + got >= size_)) {
@@ -117,6 +141,7 @@ bool HttpAudioFile::readStream(Block& into, const size_t length) {
   }
   // Dropped (or cancelled): range requests for this block; the next one reopens the stream.
   if (!cancelled_) {
+    ++streamDrops;
     INX_SERIAL.printf("[HTTPAUDIO] stream dropped at %llu\n", static_cast<unsigned long long>(streamPos_ + got));
   }
   closeStream();
@@ -230,6 +255,7 @@ bool HttpAudioFile::fetch(const uint64_t index, Block& into) {
 
   uint32_t delayMs = FIRST_RETRY_DELAY_MS;
   for (int attempt = 0; attempt < ATTEMPTS && !cancelled_; ++attempt) {
+    ++rangeFetches;
     int status = 0;
     if (fetchOnce(start, length, into, status)) {
       into.index = index;

@@ -16,6 +16,10 @@
  * block in sequence reopens it, as it does after a dropped stream. One open connection at most:
  * each holds memory.
  *
+ * The stream is read at a steady STREAM_PACE_BYTES_PER_S after the first STREAM_FAST_START_BYTES
+ * (which start playback quickly), not in full-speed 128 KB bursts: those starved the audio module's
+ * Bluetooth, a few centimetres from the T5's Wi-Fi, into stutters. Range requests are not paced.
+ *
  * A 401 renews the Audiobookshelf access token once; network errors are retried with backoff
  * before a read fails. Blocking: use it from a network task, never the main loop.
  */
@@ -38,8 +42,21 @@ class HttpAudioFile final : public AudioFile {
   bool open(std::string& error);
   /** Makes reads give up quickly (the player stopping or seeking). Any task. */
   void cancel() { cancelled_ = true; }
+  /**
+   * Readies a cancelled file for another stream (the player keeps the open file across a skip, so
+   * its cached blocks, the MP4 tables among them, need not be fetched again). Feeder task.
+   */
+  void resume() {
+    cancelled_ = false;
+    failed_ = false;
+    streamedBytes_ = 0;  // a fast start again, to fill the module's buffer quickly
+  }
   /** A read gave up on a network error (as opposed to reaching the end of the file). */
   bool failed() const { return failed_; }
+  /** Closes the sequential stream, if open: a kept file must not hold a TLS connection (internal RAM). */
+  void disconnect() { closeStream(); }
+  /** cancel() was called (reads that gave up then count as failed() too). */
+  bool cancelled() const { return cancelled_; }
   const std::string& lastError() const { return lastError_; }
 
   bool seekSet(uint64_t position) override;
@@ -48,6 +65,14 @@ class HttpAudioFile final : public AudioFile {
 
   static constexpr size_t BLOCK_BYTES = 128 * 1024;
   static constexpr int BLOCKS = 3;
+
+  /** Counts since boot, all files, for the player's stream health log line. Any task. */
+  struct Stats {
+    uint32_t streamOpens;   ///< sequential streams opened
+    uint32_t streamDrops;   ///< ... that ended early
+    uint32_t rangeFetches;  ///< single-block requests (seeks, MP4 tables, fallbacks)
+  };
+  static Stats stats();
 
  private:
   struct Block {
@@ -76,6 +101,7 @@ class HttpAudioFile final : public AudioFile {
   uint64_t lastMiss_ = UINT64_MAX;     ///< the block the last miss was for
   uint64_t streamSize_ = 0;            ///< the stream's Content-Range total, while opening
   bool streamUnsupported_ = false;     ///< the server ignores open-ended ranges
+  uint64_t streamedBytes_ = 0;         ///< read through streams so far (pacing starts after a while)
   std::atomic<bool> cancelled_{false};
   bool failed_ = false;
   std::string lastError_;

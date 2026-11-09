@@ -57,6 +57,7 @@ class AudioPlayerActivity final : public Activity {
     ShowBooks,
     ShowOutput,
     ShowAudiobookshelf,
+    ShowAudioModule,  ///< Device Management's Audio module page, back to here
     OpenBook,
     ResumeStreamed,  ///< index = position in `recent`
     ShowDownloads,

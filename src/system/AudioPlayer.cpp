@@ -68,6 +68,11 @@ constexpr uint32_t PAUSED_WIFI_OFF_MS = 3 * 60 * 1000;
 constexpr const char* WIFI_PARKED_MESSAGE = "Wi-Fi off while paused";
 /** How long resumeAfterScreen() keeps the Wi-Fi it was handed, for the stream to take over. */
 constexpr uint32_t HANDED_WIFI_HOLD_MS = 20000;
+// The feeder keeps Wi-Fi this long after its last stream ends, so a skip, a seek or the next
+// chapter reuses the connection instead of turning the radio off and joining again.
+constexpr uint32_t FEED_WIFI_LINGER_MS = 20000;
+/** While streaming, a log line this often on how the stream keeps up (see logStreamHealth()). */
+constexpr uint32_t STREAM_HEALTH_LOG_MS = 20000;
 constexpr const char* WIFI_RECONNECTING_MESSAGE = "Reconnecting Wi-Fi...";
 constexpr uint32_t SYNC_TOLERANCE_MS = 2000;
 constexpr const char* ABS_KEY_PREFIX = "abs:";
@@ -251,7 +256,14 @@ void setActiveFile(HttpAudioFile* file) {
   activeFile = file;
 }
 
-void runFeedJob(const FeedJob& job) {
+std::atomic<uint32_t> feedBytes{0};  // bytes the feeder queued, all streams (stream health log)
+
+// The last job's source and file (feeder task only), reused when the next job is the same track.
+std::unique_ptr<AudioSource> keptSource;
+HttpAudioFile* keptFile = nullptr;  // owned by keptSource
+std::string keptUrl;
+
+void runFeedJob(const FeedJob& job, bool& holdsWifi) {
   feedStreamId = job.streamId;
   feedStartKnown = false;
   feedState = FeedState::Running;
@@ -264,25 +276,62 @@ void runFeedJob(const FeedJob& job) {
   };
 
   std::string error;
-  AbsWifi::Use wifi(error);
-  if (!wifi.ok()) return fail(error);
-  auto file = std::make_unique<HttpAudioFile>(Abs::url(job.url));
-  HttpAudioFile* raw = file.get();
-  setActiveFile(raw);
-  if (!raw->open(error)) {
-    setActiveFile(nullptr);
-    return fail(error);
+  const uint32_t t0 = millis();
+  if (holdsWifi && !AbsWifi::connected()) {
+    // The network dropped under the hold: give it back so acquire() joins again.
+    AbsWifi::release();
+    holdsWifi = false;
   }
-  auto trackSource = AudioSource::forName(job.name);
-  if (!trackSource || !trackSource->open(std::move(file))) {
-    setActiveFile(nullptr);
-    return fail(trackSource ? trackSource->error() : "unsupported file type");
+  if (!holdsWifi) {
+    if (!AbsWifi::acquire(error)) return fail(error);
+    holdsWifi = true;
   }
+  const uint32_t tWifi = millis();
+  // The same track again (a skip, a seek): reuse the parsed source and its cached blocks, rather
+  // than read the header and the MP4 tables over new connections, which took 15-20 s.
+  std::unique_ptr<AudioSource> trackSource;
+  HttpAudioFile* raw = nullptr;
+  const bool reused = keptSource && keptUrl == job.url;
+  if (reused) {
+    trackSource = std::move(keptSource);
+    raw = keptFile;
+    raw->resume();
+    setActiveFile(raw);
+  } else {
+    keptSource.reset();
+    keptFile = nullptr;
+    auto file = std::make_unique<HttpAudioFile>(Abs::url(job.url));
+    raw = file.get();
+    setActiveFile(raw);
+    if (!raw->open(error)) {
+      setActiveFile(nullptr);
+      return fail(error);
+    }
+    trackSource = AudioSource::forName(job.name);
+    if (!trackSource || !trackSource->open(std::move(file))) {
+      setActiveFile(nullptr);
+      return fail(trackSource ? trackSource->error() : "unsupported file type");
+    }
+  }
+  const uint32_t tOpen = millis();
+  // Kept for the next job unless a read failed on the network (not merely cancelled).
+  auto keep = [&] {
+    if (raw->failed() && !raw->cancelled()) return;
+    raw->disconnect();
+    keptSource = std::move(trackSource);
+    keptFile = raw;
+    keptUrl = job.url;
+  };
   const uint32_t actual = trackSource->seek(job.startMs);
   if (jobStale(job)) {
     setActiveFile(nullptr);
+    keep();
     return;
   }
+  // Where a stream's start goes; the module starts playing once its first audio arrives.
+  AudioModule::logf("Feed: at %lu s; Wi-Fi %lu ms, %s %lu ms, seek %lu ms", static_cast<unsigned long>(actual / 1000),
+                    static_cast<unsigned long>(tWifi - t0), reused ? "same file" : "open + header",
+                    static_cast<unsigned long>(tOpen - tWifi), static_cast<unsigned long>(millis() - tOpen));
   feedStartMs = actual;
   feedStartKnown = true;
   uint8_t start[5];
@@ -308,13 +357,21 @@ void runFeedJob(const FeedJob& job) {
       break;
     }
     queue.push(RecordKind::Data, job.streamId, chunk, static_cast<uint16_t>(n), job.generation);
+    feedBytes += n;
   }
   setActiveFile(nullptr);
+  keep();
 }
 
 void feedTaskMain(void*) {
+  bool holdsWifi = false;  // across jobs, until FEED_WIFI_LINGER_MS pass without one
   for (;;) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    const uint32_t woken = ulTaskNotifyTake(pdTRUE, holdsWifi ? pdMS_TO_TICKS(FEED_WIFI_LINGER_MS) : portMAX_DELAY);
+    if (woken == 0 && holdsWifi) {
+      AbsWifi::release();
+      holdsWifi = false;
+      continue;
+    }
     for (;;) {
       FeedJob job;
       {
@@ -323,7 +380,7 @@ void feedTaskMain(void*) {
         job = pendingJob;
         jobPending = false;
       }
-      runFeedJob(job);
+      runFeedJob(job, holdsWifi);
     }
   }
 }
@@ -886,6 +943,7 @@ void startStream(uint32_t ms) {
   streamId = static_cast<uint8_t>(streamId + 1);
   finished = false;
   if (remote) {
+    AudioModule::logf("Player: stream from %lu s", static_cast<unsigned long>(ms / 1000));
     FeedJob job;
     job.url = tracks[track].url;
     job.name = tracks[track].name;
@@ -1270,7 +1328,8 @@ bool suspendForScreen() {
   if (!isOpen || finished) return false;
   const bool wasPlaying = !paused;
   if (wasPlaying) togglePause();
-  if (remote && streamActive && !wifiParked) {
+  // Also a stream that is retrying (not active): no retries, and no Wi-Fi use, under the screen.
+  if (remote && !wifiParked) {
     stopStream();
     wifiParked = true;
     message = WIFI_PARKED_MESSAGE;
@@ -1416,6 +1475,58 @@ View view() {
 
 bool keepAwake() { return isOpen && !paused && !finished; }
 
+namespace {
+
+/**
+ * One log line on a playing stream every STREAM_HEALTH_LOG_MS: how fast it arrives, what is
+ * buffered on each side, the module's underruns (what stutters), and how many connections and
+ * single-block fetches it took (each a TLS handshake). Tells a slow network from a slow link.
+ */
+void logStreamHealth() {
+  static uint32_t lastMs = 0;
+  static uint32_t lastBytes = 0;
+  static HttpAudioFile::Stats last{};
+  static AudioLink::Counters lastLink{};
+  const uint32_t now = millis();
+  if (!remote || paused || !streamActive) {
+    lastMs = 0;
+    return;
+  }
+  const HttpAudioFile::Stats stats = HttpAudioFile::stats();
+  const uint32_t bytes = feedBytes.load();
+  const AudioLink::Counters link = AudioLink::counters();
+  if (lastMs != 0 && now - lastMs >= STREAM_HEALTH_LOG_MS) {
+    const AudioLink::ModuleStatus module = AudioLink::status();
+    AudioModule::logf(
+        "Stream: %lu KB/s in, queue %u KB; module %lu KB + %u ms, %u underruns, %u decode errors, %lu KB heap; "
+        "%lu opens, %lu drops, %lu block fetches; internal %u KB block, %u KB free (min %u); "
+        "link %lu resends, %lu write errors, %lu bad frames",
+        static_cast<unsigned long>((bytes - lastBytes) / (now - lastMs)),
+        static_cast<unsigned>(queue.usedBytes() / 1024),
+        static_cast<unsigned long>(module.valid ? module.status.rxBuffered / 1024 : 0),
+        module.valid ? module.status.pcmBufferedMs : 0, module.valid ? module.status.underruns : 0,
+        module.valid ? module.status.decodeErrors : 0,
+        static_cast<unsigned long>(module.valid ? module.status.freeHeap / 1024 : 0),
+        static_cast<unsigned long>(stats.streamOpens - last.streamOpens),
+        static_cast<unsigned long>(stats.streamDrops - last.streamDrops),
+        static_cast<unsigned long>(stats.rangeFetches - last.rangeFetches),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024),
+        static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024),
+        static_cast<unsigned long>(link.resends - lastLink.resends),
+        static_cast<unsigned long>(link.writeErrors - lastLink.writeErrors),
+        static_cast<unsigned long>(link.badFrames - lastLink.badFrames));
+  } else if (lastMs != 0) {
+    return;
+  }
+  lastMs = now;
+  lastBytes = bytes;
+  last = stats;
+  lastLink = link;
+}
+
+}  // namespace
+
 void service() {
   if (!isOpen) return;
   if (!paused && !finished) wakeModule();
@@ -1427,7 +1538,7 @@ void service() {
     if (!finished && !wifiParked) startStream(positionMs);
   }
   if (remote && paused && streamActive && !wifiParked && millis() - pausedAtMs >= PAUSED_WIFI_OFF_MS) {
-    // Paused a while: stop the stream, which ends the feeder's hold on Wi-Fi (off unless another
+    // Paused a while: stop the stream, which ends the feeder's hold on Wi-Fi once its linger passes (off unless another
     // user has it). The position stays; togglePause() restarts from it.
     saveProgress();
     stopStream();
@@ -1437,6 +1548,7 @@ void service() {
   }
   if (retryStreamAtMs != 0 && static_cast<int32_t>(millis() - retryStreamAtMs) >= 0) startStream(positionMs);
   // The Wi-Fi hold resumeAfterScreen() took over: the resumed stream holds its own by now.
+  logStreamHealth();
   if (handedWifiAtMs != 0 && millis() - handedWifiAtMs >= HANDED_WIFI_HOLD_MS) {
     handedWifiAtMs = 0;
     AbsWifi::release();

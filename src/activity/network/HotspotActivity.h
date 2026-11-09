@@ -47,8 +47,7 @@ class HotspotActivity final : public Activity {
         renderingMutex(nullptr),
         updateRequired(false),
         state(HotspotState::STARTING),
-        onGoBack(onGoBack) {
-  }
+        onGoBack(onGoBack) {}
 
   /**
    * @brief Called when activity becomes active
@@ -78,6 +77,8 @@ class HotspotActivity final : public Activity {
   bool preventAutoSleep() override { return webServer && webServer->isRunning(); }
 
  private:
+  bool resumeAudio = false;  ///< a book was playing on entering: play it again on leaving
+
   /**
    * @brief Static trampoline function for FreeRTOS task
    * @param param Pointer to HotspotActivity instance

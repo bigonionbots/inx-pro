@@ -51,6 +51,17 @@ uint32_t rxFree = 0;
 uint32_t inflightAudio = 0;
 uint32_t inflightBytes = 0;
 uint32_t lastFastResendMs = 0;
+// A frame USB would not take (UsbSerialHost::write failed, e.g. briefly out of internal RAM): the
+// module never sees it, and without later frames to show the gap it would wait RESEND_TIMEOUT_MS
+// (longer than its buffer lasts). Resend soon instead.
+bool writeFailed = false;
+uint32_t writeFailedMs = 0;
+constexpr uint32_t WRITE_RETRY_MS = 20;
+// No ACK progress this long with frames in flight: resend them. The protocol's RESEND_TIMEOUT_MS
+// (1 s) is longer than the module's buffer lasts once a lost frame or ACK stalls the window (seen
+// as 1-2 s pauses with link resends); the module ACKs within ACK_INTERVAL (10 ms) and only
+// acknowledges duplicates, so resending sooner costs a few KB of USB at most.
+constexpr uint32_t HOST_RESEND_TIMEOUT_MS = 250;
 uint32_t lastProgressMs = 0;
 uint32_t lastPingMs = 0;
 bool linkReady = false;
@@ -75,6 +86,7 @@ class Guard {
 };
 
 void clearWindowLocked() {
+  writeFailed = false;
   windowHead = 0;
   windowCount = 0;
   inflightAudio = 0;
@@ -99,10 +111,18 @@ void sendPingLocked() {
   UsbSerialHost::write(frame, size, WRITE_TIMEOUT_MS);
 }
 
+void writeFrameLocked(const uint8_t* frame, const size_t size) {
+  if (UsbSerialHost::write(frame, size, WRITE_TIMEOUT_MS) == size) return;
+  ++linkCounters.writeErrors;
+  if (!writeFailed) writeFailedMs = millis();
+  writeFailed = true;
+}
+
 void resendWindowLocked() {
+  writeFailed = false;
   for (size_t i = 0; i < windowCount; ++i) {
     const Slot& slot = window[(windowHead + i) % audiolink::MAX_WINDOW_FRAMES];
-    UsbSerialHost::write(slot.frame, slot.size, WRITE_TIMEOUT_MS);
+    writeFrameLocked(slot.frame, slot.size);
   }
   ++linkCounters.resends;
   lastProgressMs = millis();
@@ -220,7 +240,16 @@ void handleFrame() {
 
 void resendIfStalled() {
   Guard guard;
-  if (windowCount == 0 || millis() - lastProgressMs < audiolink::RESEND_TIMEOUT_MS) return;
+  if (windowCount == 0) {
+    writeFailed = false;
+    return;
+  }
+  if (writeFailed && millis() - writeFailedMs >= WRITE_RETRY_MS) {
+    ++linkCounters.writeRetries;
+    resendWindowLocked();
+    return;
+  }
+  if (millis() - lastProgressMs < HOST_RESEND_TIMEOUT_MS) return;
   resendWindowLocked();
 }
 
@@ -268,7 +297,7 @@ bool trySendLocked(const Type type, const uint8_t* prefix, const size_t prefixLe
   inflightBytes += slot.size;
   ++linkCounters.framesSent;
   linkCounters.audioBytes += audioBytes;
-  UsbSerialHost::write(slot.frame, slot.size, WRITE_TIMEOUT_MS);
+  writeFrameLocked(slot.frame, slot.size);
   return true;
 }
 

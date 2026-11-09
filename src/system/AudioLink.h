@@ -61,6 +61,8 @@ struct Counters {
   uint32_t resends = 0;
   uint32_t badFrames = 0;
   uint32_t audioBytes = 0;
+  uint32_t writeErrors = 0;   ///< frames USB would not take
+  uint32_t writeRetries = 0;  ///< window resends for them (instead of waiting for the timeout)
 };
 Counters counters();
 
