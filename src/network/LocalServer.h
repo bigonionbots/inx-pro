@@ -117,6 +117,11 @@ class LocalServer {
   void handleWifiDelete() const;
   void handleKOReaderGet() const;
   void handleKOReaderPost() const;
+#if INX_HAS_AUDIO_MODULE
+  void handleAudiobookshelfGet() const;
+  void handleAudiobookshelfPost() const;
+  void handleAudiobookshelfDelete() const;
+#endif
   void handleGeminiGet() const;
   void handleGeminiPost() const;
   void handleGeminiDelete() const;

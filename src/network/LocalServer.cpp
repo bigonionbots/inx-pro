@@ -12,10 +12,10 @@
 #include <FsHelpers.h>
 #include <HalGPIO.h>
 #endif
+#include <BoardConfig.h>
 #include <SDCardManager.h>
 #include <WiFi.h>
 #include <esp_task_wdt.h>
-#include <BoardConfig.h>
 
 #include <algorithm>
 #include <cctype>
@@ -36,10 +36,10 @@
 #include "html/FilesPageHtml.generated.h"
 #include "html/FilesPageJs.generated.h"
 #include "html/FontManagerPageHtml.generated.h"
-#include "html/LanguageManagerPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
 #include "html/InxFontPackJs.generated.h"
 #include "html/JsZipMinJs.generated.h"
+#include "html/LanguageManagerPageHtml.generated.h"
 #include "html/QrCreatorLogoJs.generated.h"
 #include "html/SettingsPageHtml.generated.h"
 #include "system/LanguagePackageManager.h"
@@ -50,6 +50,10 @@
 #include "util/StringUtils.h"
 #endif
 #include "KOReaderCredentialStore.h"
+#if INX_HAS_AUDIO_MODULE
+#include "abs/AbsClient.h"
+#include "abs/AbsLibrary.h"
+#endif
 #include "state/NetworkCredential.h"
 #ifndef INX_SIMULATOR_WEB_ONLY
 #include "state/OpdsServerStore.h"
@@ -263,8 +267,8 @@ body{background:var(--inx-page)!important;color:var(--inx-ink)!important;font-fa
     titleMarkerAscii += "</title>";
     String pluginAlias = "/plugin/";
     pluginAlias += link.id.c_str();
-    const bool uriMatch = currentUri != nullptr &&
-        (String(currentUri) == link.path.c_str() || String(currentUri) == pluginAlias);
+    const bool uriMatch =
+        currentUri != nullptr && (String(currentUri) == link.path.c_str() || String(currentUri) == pluginAlias);
     if (uriMatch || page.indexOf(titleMarker) >= 0 || page.indexOf(titleMarkerAscii) >= 0) {
       label = link.label.c_str();
       active = link.path.c_str();
@@ -276,12 +280,33 @@ body{background:var(--inx-page)!important;color:var(--inx-ink)!important;font-fa
   }
 
   const char* railItems[][3] = {
-      {"/", "<svg viewBox=\"0 0 24 24\"><path d=\"m3 10 9-7 9 7\"/><path d=\"M5 9v11h14V9\"/><path d=\"M9 20v-6h6v6\"/></svg>", "Dashboard"},
-      {"/files", "<svg viewBox=\"0 0 24 24\"><rect x=\"3\" y=\"4\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"4\" width=\"7\" height=\"7\"/><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"14\" width=\"7\" height=\"7\"/></svg>", "Files"},
-      {"/epub", "<svg viewBox=\"0 0 24 24\"><path d=\"M5 4.5A2.5 2.5 0 0 1 7.5 2H19v17H7.5A2.5 2.5 0 0 1 5 16.5v-12Z\"/><path d=\"M5 16.5A2.5 2.5 0 0 1 7.5 14H19\"/></svg>", "Books"},
+      {"/",
+       "<svg viewBox=\"0 0 24 24\"><path d=\"m3 10 9-7 9 7\"/><path d=\"M5 9v11h14V9\"/><path d=\"M9 "
+       "20v-6h6v6\"/></svg>",
+       "Dashboard"},
+      {"/files",
+       "<svg viewBox=\"0 0 24 24\"><rect x=\"3\" y=\"4\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"4\" width=\"7\" "
+       "height=\"7\"/><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"14\" width=\"7\" "
+       "height=\"7\"/></svg>",
+       "Files"},
+      {"/epub",
+       "<svg viewBox=\"0 0 24 24\"><path d=\"M5 4.5A2.5 2.5 0 0 1 7.5 2H19v17H7.5A2.5 2.5 0 0 1 5 16.5v-12Z\"/><path "
+       "d=\"M5 16.5A2.5 2.5 0 0 1 7.5 14H19\"/></svg>",
+       "Books"},
       {"/font-manager", "<span class=inx-font-glyph>Aa</span>", "Fonts"},
-      {"/language-manager", "<svg viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.3 2.5 3.4 5.5 3.4 9S14.3 18.5 12 21M12 3c-2.3 2.5-3.4 5.5-3.4 9S9.7 18.5 12 21\"/></svg>", "Language"},
-      {"/settings", "<svg viewBox=\"0 0 24 24\"><path d=\"M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.37-.31-.6-.22l-2.49 1a7.4 7.4 0 0 0-1.69-.98l-.38-2.65A.51.51 0 0 0 14 2h-4a.51.51 0 0 0-.5.42l-.38 2.65c-.61.25-1.17.58-1.69.98l-2.49-1c-.23-.08-.48 0-.6.22l-2 3.46c-.12.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.02.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.37.31.6.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1c.23.08.48 0 .6-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65Z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/></svg>", "Settings"},
+      {"/language-manager",
+       "<svg viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.3 2.5 3.4 5.5 3.4 "
+       "9S14.3 18.5 12 21M12 3c-2.3 2.5-3.4 5.5-3.4 9S9.7 18.5 12 21\"/></svg>",
+       "Language"},
+      {"/settings",
+       "<svg viewBox=\"0 0 24 24\"><path d=\"M19.43 "
+       "12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.37-.31-.6-.22l-"
+       "2.49 1a7.4 7.4 0 0 0-1.69-.98l-.38-2.65A.51.51 0 0 0 14 2h-4a.51.51 0 0 0-.5.42l-.38 "
+       "2.65c-.61.25-1.17.58-1.69.98l-2.49-1c-.23-.08-.48 0-.6.22l-2 3.46c-.12.22-.07.49.12.64l2.11 "
+       "1.65c-.04.32-.07.65-.07.98s.02.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.37.31.6.22l2.49-1c.52.4 "
+       "1.08.73 1.69.98l.38 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 "
+       "1c.23.08.48 0 .6-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65Z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/></svg>",
+       "Settings"},
   };
   String rail = "<aside class=inx-rail><a class=inx-brand href=/ aria-label=INX>INX</a>";
   for (const auto& item : railItems) {
@@ -303,8 +328,14 @@ body{background:var(--inx-page)!important;color:var(--inx-ink)!important;font-fa
   rail += activePluginLabel;
   rail += "\" aria-label=\"";
   rail += activePluginLabel;
-  rail += "\"><svg viewBox=\"0 0 24 24\"><path d=\"M19 13a2 2 0 1 0 0-4h-1V5a2 2 0 0 0-2-2h-4v1a2 2 0 1 1-4 0V3H6a2 2 0 0 0-2 2v4h1a2 2 0 1 1 0 4H4v4a2 2 0 0 0 2 2h4v-1a2 2 0 1 1 4 0v1h4a2 2 0 0 0 2-2v-4Z\"/></svg></a>";
-  rail += "</aside><div class=inx-mobile-menu-backdrop id=inx-mobile-menu-backdrop></div><nav class=inx-mobile-menu id=inx-mobile-menu aria-label=Mobile navigation><div class=inx-mobile-menu-head><strong>INX</strong><button class=inx-mobile-menu-close id=inx-mobile-menu-close type=button aria-label=Close>×</button></div><div class=inx-mobile-menu-links>";
+  rail +=
+      "\"><svg viewBox=\"0 0 24 24\"><path d=\"M19 13a2 2 0 1 0 0-4h-1V5a2 2 0 0 0-2-2h-4v1a2 2 0 1 1-4 0V3H6a2 2 0 0 "
+      "0-2 2v4h1a2 2 0 1 1 0 4H4v4a2 2 0 0 0 2 2h4v-1a2 2 0 1 1 4 0v1h4a2 2 0 0 0 2-2v-4Z\"/></svg></a>";
+  rail +=
+      "</aside><div class=inx-mobile-menu-backdrop id=inx-mobile-menu-backdrop></div><nav class=inx-mobile-menu "
+      "id=inx-mobile-menu aria-label=Mobile navigation><div class=inx-mobile-menu-head><strong>INX</strong><button "
+      "class=inx-mobile-menu-close id=inx-mobile-menu-close type=button aria-label=Close>×</button></div><div "
+      "class=inx-mobile-menu-links>";
   for (const auto& item : railItems) {
     rail += "<a class=inx-mobile-menu-link";
     if (active == item[0]) rail += " active aria-current=page";
@@ -320,12 +351,46 @@ body{background:var(--inx-page)!important;color:var(--inx-ink)!important;font-fa
   if (pluginPageActive) rail += " active aria-current=page";
   rail += " href=\"";
   rail += activePluginHref;
-  rail += "\"><svg viewBox=\"0 0 24 24\"><path d=\"M19 13a2 2 0 1 0 0-4h-1V5a2 2 0 0 0-2-2h-4v1a2 2 0 1 1-4 0V3H6a2 2 0 0 0-2 2v4h1a2 2 0 1 1 0 4H4v4a2 2 0 0 0 2 2h4v-1a2 2 0 1 1 4 0v1h4a2 2 0 0 0 2-2v-4Z\"/></svg><span>Plugins</span></a></div></nav><script>(function(){var b=document.getElementById('inx-mobile-menu-toggle'),m=document.getElementById('inx-mobile-menu'),o=document.getElementById('inx-mobile-menu-backdrop'),c=document.getElementById('inx-mobile-menu-close');if(!b||!m||!o)return;function close(){b.setAttribute('aria-expanded','false');m.classList.remove('open');o.classList.remove('open')}function toggle(){var open=!m.classList.contains('open');b.setAttribute('aria-expanded',open?'true':'false');m.classList.toggle('open',open);o.classList.toggle('open',open)}b.addEventListener('click',toggle);o.addEventListener('click',close);if(c)c.addEventListener('click',close);document.addEventListener('keydown',function(e){if(e.key==='Escape')close()})})();</script><header class=inx-topbar><button class=inx-mobile-menu-toggle id=inx-mobile-menu-toggle type=button aria-label=Open menu aria-expanded=false><svg viewBox=\"0 0 24 24\"><path d=\"M4 6h16M4 12h16M4 18h16\"/></svg></button><div class=inx-heading><div><strong>";
+  rail +=
+      "\"><svg viewBox=\"0 0 24 24\"><path d=\"M19 13a2 2 0 1 0 0-4h-1V5a2 2 0 0 0-2-2h-4v1a2 2 0 1 1-4 0V3H6a2 2 0 0 "
+      "0-2 2v4h1a2 2 0 1 1 0 4H4v4a2 2 0 0 0 2 2h4v-1a2 2 0 1 1 4 0v1h4a2 2 0 0 0 "
+      "2-2v-4Z\"/></svg><span>Plugins</span></a></div></nav><script>(function(){var "
+      "b=document.getElementById('inx-mobile-menu-toggle'),m=document.getElementById('inx-mobile-menu'),o=document."
+      "getElementById('inx-mobile-menu-backdrop'),c=document.getElementById('inx-mobile-menu-close');if(!b||!m||!o)"
+      "return;function "
+      "close(){b.setAttribute('aria-expanded','false');m.classList.remove('open');o.classList.remove('open')}function "
+      "toggle(){var "
+      "open=!m.classList.contains('open');b.setAttribute('aria-expanded',open?'true':'false');m.classList.toggle('open'"
+      ",open);o.classList.toggle('open',open)}b.addEventListener('click',toggle);o.addEventListener('click',close);if("
+      "c)c.addEventListener('click',close);document.addEventListener('keydown',function(e){if(e.key==='Escape')close()}"
+      ")})();</script><header class=inx-topbar><button class=inx-mobile-menu-toggle id=inx-mobile-menu-toggle "
+      "type=button aria-label=Open menu aria-expanded=false><svg viewBox=\"0 0 24 24\"><path d=\"M4 6h16M4 12h16M4 "
+      "18h16\"/></svg></button><div class=inx-heading><div><strong>";
   rail += label;
   rail += "</strong><small><span class=inx-current>Dashboard</span><span class=inx-slash>/</span>";
   rail += label;
   rail += "</small></div></div></header>";
-  rail += "<script>(function(){var b=document.getElementById('inx-mobile-menu-toggle'),m=document.getElementById('inx-mobile-menu'),o=document.getElementById('inx-mobile-menu-backdrop'),c=document.getElementById('inx-mobile-menu-close');if(!b||!m||!o)return;function close(){b.setAttribute('aria-expanded','false');m.classList.remove('open');o.classList.remove('open')}function toggle(){var open=!m.classList.contains('open');b.setAttribute('aria-expanded',open?'true':'false');m.classList.toggle('open',open);o.classList.toggle('open',open)}b.addEventListener('click',toggle);o.addEventListener('click',close);if(c)c.addEventListener('click',close);document.addEventListener('keydown',function(e){if(e.key==='Escape')close()})})();</script><script>(function(){function normalize(path){path=path||'/';if(path.length>1&&path.charAt(path.length-1)==='/')path=path.slice(0,-1);return path||'/'}var current=normalize(window.location.pathname);document.querySelectorAll('.inx-rail-link,.inx-plugin-launcher,.inx-mobile-menu-link').forEach(function(link){var href=link.getAttribute('href')||'/';var route=normalize(new URL(href,window.location.href).pathname);var plugin=link.classList.contains('inx-plugin-launcher')||route==='/plugins'||route.indexOf('/plugin/')===0;var match=route===current||(route==='/epub'&&current==='/epub-viewer.html')||(plugin&&(current==='/plugins'||current.indexOf('/plugin/')===0));link.classList.toggle('active',match);if(match)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current')})})();</script>";
+  rail +=
+      "<script>(function(){var "
+      "b=document.getElementById('inx-mobile-menu-toggle'),m=document.getElementById('inx-mobile-menu'),o=document."
+      "getElementById('inx-mobile-menu-backdrop'),c=document.getElementById('inx-mobile-menu-close');if(!b||!m||!o)"
+      "return;function "
+      "close(){b.setAttribute('aria-expanded','false');m.classList.remove('open');o.classList.remove('open')}function "
+      "toggle(){var "
+      "open=!m.classList.contains('open');b.setAttribute('aria-expanded',open?'true':'false');m.classList.toggle('open'"
+      ",open);o.classList.toggle('open',open)}b.addEventListener('click',toggle);o.addEventListener('click',close);if("
+      "c)c.addEventListener('click',close);document.addEventListener('keydown',function(e){if(e.key==='Escape')close()}"
+      ")})();</script><script>(function(){function "
+      "normalize(path){path=path||'/';if(path.length>1&&path.charAt(path.length-1)==='/')path=path.slice(0,-1);return "
+      "path||'/'}var "
+      "current=normalize(window.location.pathname);document.querySelectorAll('.inx-rail-link,.inx-plugin-launcher,.inx-"
+      "mobile-menu-link').forEach(function(link){var href=link.getAttribute('href')||'/';var route=normalize(new "
+      "URL(href,window.location.href).pathname);var "
+      "plugin=link.classList.contains('inx-plugin-launcher')||route==='/plugins'||route.indexOf('/plugin/')===0;var "
+      "match=route===current||(route==='/epub'&&current==='/epub-viewer.html')||(plugin&&(current==='/"
+      "plugins'||current.indexOf('/plugin/"
+      "')===0));link.classList.toggle('active',match);if(match)link.setAttribute('aria-current','page');else "
+      "link.removeAttribute('aria-current')})})();</script>";
   if (page.indexOf("<body>") >= 0) {
     page.replace("<body>", "<body>" + rail);
   } else if (page.indexOf("<div class=container>") >= 0) {
@@ -339,16 +404,23 @@ body{background:var(--inx-page)!important;color:var(--inx-ink)!important;font-fa
   // The EPUB page uses the same toolbar for search and the grid/list control.
   // It is injected here so plugin pages and the older HTML assets remain compatible.
   if (page.indexOf("id=file-table") >= 0 && page.indexOf("id=inx-book-toolbar") < 0) {
-    const String toolbar = "<div class=inx-book-toolbar id=inx-book-toolbar><input class=inx-book-search id=inx-book-search type=search placeholder=\"Search books\" aria-label=\"Search books\"><button class=inx-view-toggle id=inx-list-view-btn type=button title=List view aria-label=List view>☷</button><button class=inx-view-toggle id=inx-grid-view-btn type=button title=Grid view aria-label=Grid view>▦</button></div>";
+    const String toolbar =
+        "<div class=inx-book-toolbar id=inx-book-toolbar><input class=inx-book-search id=inx-book-search type=search "
+        "placeholder=\"Search books\" aria-label=\"Search books\"><button class=inx-view-toggle id=inx-list-view-btn "
+        "type=button title=List view aria-label=List view>☷</button><button class=inx-view-toggle id=inx-grid-view-btn "
+        "type=button title=Grid view aria-label=Grid view>▦</button></div>";
     page.replace("<div id=file-table>", toolbar + "<div id=file-table>");
   }
 
   if (page.indexOf("id=file-table") >= 0) {
-    const char* epubGridFinalStyle = R"rawliteral(<style id="inx-epub-grid-final-style">.inx-grid .folder-open .inx-folder-stack,.inx-grid .folder-open .inx-folder-cover,.inx-grid .book-open .inx-cover{width:80%!important;max-width:80%!important;height:auto!important;min-height:0!important;aspect-ratio:5/4!important;margin:0!important}.inx-grid .book-open .inx-cover{position:relative;display:block}.inx-grid .book-open .inx-cover img{position:absolute;inset:0;width:100%!important;height:100%!important;object-fit:contain!important;object-position:left center!important}.inx-grid .book-open .inx-cover,.inx-grid .folder-open .inx-cover,.inx-folder-stack,.inx-folder-stack-card,.inx-folder-stack-card img{border-radius:0!important}.inx-cover.has-thumbnail,.inx-folder-stack.has-thumbnail{background:transparent!important;box-shadow:none!important}.inx-cover.has-thumbnail img,.inx-folder-stack.has-thumbnail .inx-folder-stack-card,.inx-folder-stack.has-thumbnail .inx-folder-stack-card img{background:transparent!important;box-shadow:none!important}</style>)rawliteral";
+    const char* epubGridFinalStyle =
+        R"rawliteral(<style id="inx-epub-grid-final-style">.inx-grid .folder-open .inx-folder-stack,.inx-grid .folder-open .inx-folder-cover,.inx-grid .book-open .inx-cover{width:80%!important;max-width:80%!important;height:auto!important;min-height:0!important;aspect-ratio:5/4!important;margin:0!important}.inx-grid .book-open .inx-cover{position:relative;display:block}.inx-grid .book-open .inx-cover img{position:absolute;inset:0;width:100%!important;height:100%!important;object-fit:contain!important;object-position:left center!important}.inx-grid .book-open .inx-cover,.inx-grid .folder-open .inx-cover,.inx-folder-stack,.inx-folder-stack-card,.inx-folder-stack-card img{border-radius:0!important}.inx-cover.has-thumbnail,.inx-folder-stack.has-thumbnail{background:transparent!important;box-shadow:none!important}.inx-cover.has-thumbnail img,.inx-folder-stack.has-thumbnail .inx-folder-stack-card,.inx-folder-stack.has-thumbnail .inx-folder-stack-card img{background:transparent!important;box-shadow:none!important}</style>)rawliteral";
     page.replace("</html>", String(epubGridFinalStyle) + "</html>");
-    const char* epubGridSizingStyle = R"rawliteral(<style id="inx-epub-grid-sizing-style">.file-list.inx-grid{grid-template-columns:repeat(7,minmax(0,1fr));justify-content:start}.inx-grid .book-card,.inx-grid .folder-card{max-width:288px}.inx-grid .inx-card-actions{justify-content:flex-end}.inx-grid .folder-open .inx-folder-cover,.inx-grid .book-open .inx-cover{width:100%!important;max-width:100%!important}@media(max-width:760px){.file-list.inx-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 12px}}</style>)rawliteral";
+    const char* epubGridSizingStyle =
+        R"rawliteral(<style id="inx-epub-grid-sizing-style">.file-list.inx-grid{grid-template-columns:repeat(7,minmax(0,1fr));justify-content:start}.inx-grid .book-card,.inx-grid .folder-card{max-width:288px}.inx-grid .inx-card-actions{justify-content:flex-end}.inx-grid .folder-open .inx-folder-cover,.inx-grid .book-open .inx-cover{width:100%!important;max-width:100%!important}@media(max-width:760px){.file-list.inx-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 12px}}</style>)rawliteral";
     page.replace("</html>", String(epubGridSizingStyle) + "</html>");
-    const char* epubGridVisualStyle = R"rawliteral(<style id="inx-epub-grid-visual-style">.inx-grid .folder-open .inx-folder-stack,.inx-grid .folder-open .inx-folder-cover,.inx-grid .book-open .inx-cover{width:100%!important;max-width:100%!important;aspect-ratio:2/3!important}.inx-grid .inx-grid-delete{position:absolute;z-index:4;top:38px;right:7px;width:30px;height:30px;background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.9);box-shadow:0 2px 6px rgba(30,34,38,.18);border-radius:4px!important}.inx-folder-stack.has-thumbnail .folder-stack-1,.inx-folder-stack.has-thumbnail .folder-stack-2{background:#d9dcde!important;box-shadow:none!important}.inx-folder-stack-card img{background:transparent!important}</style>)rawliteral";
+    const char* epubGridVisualStyle =
+        R"rawliteral(<style id="inx-epub-grid-visual-style">.inx-grid .folder-open .inx-folder-stack,.inx-grid .folder-open .inx-folder-cover,.inx-grid .book-open .inx-cover{width:100%!important;max-width:100%!important;aspect-ratio:2/3!important}.inx-grid .inx-grid-delete{position:absolute;z-index:4;top:38px;right:7px;width:30px;height:30px;background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.9);box-shadow:0 2px 6px rgba(30,34,38,.18);border-radius:4px!important}.inx-folder-stack.has-thumbnail .folder-stack-1,.inx-folder-stack.has-thumbnail .folder-stack-2{background:#d9dcde!important;box-shadow:none!important}.inx-folder-stack-card img{background:transparent!important}</style>)rawliteral";
     page.replace("</html>", String(epubGridVisualStyle) + "</html>");
   }
 
@@ -525,7 +597,7 @@ std::string epubCachePathForBookPath(const std::string& bookPath) {
 }
 
 #endif
-}
+}  // namespace
 
 LocalServer::LocalServer() {}
 
@@ -542,8 +614,8 @@ void LocalServer::begin() {
   const bool isInApMode = (wifiMode & WIFI_MODE_AP) && (WiFi.softAPgetStationNum() >= 0);
 
   if (!isStaConnected && !isInApMode) {
-    INX_SERIAL.printf("[%lu] [WEB] Cannot start webserver - no valid network (mode=%d, status=%d)\n", millis(), wifiMode,
-                  WiFi.status());
+    INX_SERIAL.printf("[%lu] [WEB] Cannot start webserver - no valid network (mode=%d, status=%d)\n", millis(),
+                      wifiMode, WiFi.status());
     return;
   }
 
@@ -615,6 +687,11 @@ void LocalServer::begin() {
   server->on("/api/wifi/*", HTTP_DELETE, [this] { handleWifiDelete(); });
   server->on("/api/koreader", HTTP_GET, [this] { handleKOReaderGet(); });
   server->on("/api/koreader", HTTP_POST, [this] { handleKOReaderPost(); });
+#if INX_HAS_AUDIO_MODULE
+  server->on("/api/audiobookshelf", HTTP_GET, [this] { handleAudiobookshelfGet(); });
+  server->on("/api/audiobookshelf", HTTP_POST, [this] { handleAudiobookshelfPost(); });
+  server->on("/api/audiobookshelf", HTTP_DELETE, [this] { handleAudiobookshelfDelete(); });
+#endif
 #ifndef INX_SIMULATOR_WEB_ONLY
   server->on("/api/gemini", HTTP_GET, [this] { handleGeminiGet(); });
   server->on("/api/gemini", HTTP_POST, [this] { handleGeminiPost(); });
@@ -632,9 +709,10 @@ void LocalServer::begin() {
   server->onNotFound([this] { handleNotFound(); });
   INX_SERIAL.printf("✓ jszip.min.js from firmware flash (%u bytes)\n", static_cast<unsigned>(sizeof(JSZIP_MIN_JS) - 1));
   INX_SERIAL.printf("✓ epub_page.js from firmware flash (%u bytes)\n", static_cast<unsigned>(sizeof(EPUB_PAGE_JS) - 1));
-  INX_SERIAL.printf("✓ files_page.js from firmware flash (%u bytes)\n", static_cast<unsigned>(sizeof(FILES_PAGE_JS) - 1));
+  INX_SERIAL.printf("✓ files_page.js from firmware flash (%u bytes)\n",
+                    static_cast<unsigned>(sizeof(FILES_PAGE_JS) - 1));
   INX_SERIAL.printf("✓ inx_font_pack.js from firmware flash (%u bytes)\n",
-                static_cast<unsigned>(sizeof(INX_FONT_PACK_JS) - 1));
+                    static_cast<unsigned>(sizeof(INX_FONT_PACK_JS) - 1));
 
   server->begin();
 
@@ -647,7 +725,7 @@ void LocalServer::begin() {
 
   udpActive = udp.begin(LOCAL_UDP_PORT);
   INX_SERIAL.printf("[%lu] [WEB] Discovery UDP %s on port %d\n", millis(), udpActive ? "enabled" : "failed",
-                LOCAL_UDP_PORT);
+                    LOCAL_UDP_PORT);
 
   running = true;
 
@@ -661,7 +739,7 @@ void LocalServer::begin() {
 void LocalServer::stop() {
   if (!running || !server) {
     INX_SERIAL.printf("[%lu] [WEB] stop() called but already stopped (running=%d, server=%p)\n", millis(), running,
-                  server.get());
+                      server.get());
     return;
   }
 
@@ -762,7 +840,8 @@ void LocalServer::handlePluginsPage() const {
   std::vector<PluginManager::WebLink> links;
   PluginManager::listWebPlugins(links);
 
-  String page = R"rawliteral(<!doctype html><html lang="en"><meta charset="UTF-8"><meta content="width=device-width,initial-scale=1,viewport-fit=cover" name="viewport"><title>Inx — Plugins</title><style>
+  String page =
+      R"rawliteral(<!doctype html><html lang="en"><meta charset="UTF-8"><meta content="width=device-width,initial-scale=1,viewport-fit=cover" name="viewport"><title>Inx — Plugins</title><style>
 *{box-sizing:border-box}.container{max-width:1180px;margin:0 auto;padding:34px 28px 48px}.header,.nav-links{display:none}.plugin-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}.plugin-card{display:flex;align-items:center;gap:13px;min-height:76px;padding:13px;text-decoration:none;color:#22272b;border:1px solid #d9dde0;border-radius:5px;background:#fff;transition:border-color .15s,box-shadow .15s,transform .15s}.plugin-card:hover{border-color:#8f979c;box-shadow:0 5px 12px rgba(22,28,32,.1);transform:translateY(-1px)}.plugin-card img,.plugin-card svg{width:38px;height:38px;flex:0 0 38px;object-fit:contain;fill:none;stroke:#697278;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.plugin-card-copy{min-width:0}.plugin-card-copy strong{display:block;overflow:hidden;font-size:14px;text-overflow:ellipsis;white-space:nowrap}.plugin-card-copy small{display:block;margin-top:4px;color:#737a7f;font-size:12px}.plugin-empty{padding:54px 20px;text-align:center;color:#777f84;font-size:15px}@media(max-width:760px){.container{padding:20px 16px 32px}.plugin-grid{grid-template-columns:1fr}}
 </style><div class="container"><div class="plugin-grid">)rawliteral";
 
@@ -780,7 +859,9 @@ void LocalServer::handlePluginsPage() const {
         page += link.icon.c_str();
         page += "\" alt=\"\">";
       } else {
-        page += "<svg viewBox=\"0 0 24 24\"><path d=\"M19 13a2 2 0 1 0 0-4h-1V5a2 2 0 0 0-2-2h-4v1a2 2 0 1 1-4 0V3H6a2 2 0 0 0-2 2v4h1a2 2 0 1 1 0 4H4v4a2 2 0 0 0 2 2h4v-1a2 2 0 1 1 4 0v1h4a2 2 0 0 0 2-2v-4Z\"/></svg>";
+        page +=
+            "<svg viewBox=\"0 0 24 24\"><path d=\"M19 13a2 2 0 1 0 0-4h-1V5a2 2 0 0 0-2-2h-4v1a2 2 0 1 1-4 0V3H6a2 2 0 "
+            "0 0-2 2v4h1a2 2 0 1 1 0 4H4v4a2 2 0 0 0 2 2h4v-1a2 2 0 1 1 4 0v1h4a2 2 0 0 0 2-2v-4Z\"/></svg>";
       }
       page += "<span class=plugin-card-copy><strong>";
       page += escapeHtml(link.label);
@@ -1069,7 +1150,9 @@ bool LocalServer::isEpubFile(const String& filename) const {
   return lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".epub") == 0;
 }
 
-void LocalServer::handleFileList() const { server->send(200, "text/html", addLanguageManagerNavLink(FilesPageHtml, "/files")); }
+void LocalServer::handleFileList() const {
+  server->send(200, "text/html", addLanguageManagerNavLink(FilesPageHtml, "/files"));
+}
 
 void LocalServer::handleEpubPage() const {
   server->send(200, "text/html; charset=utf-8", addLanguageManagerNavLink(EpubPageHtml, "/epub"));
@@ -1176,10 +1259,14 @@ void LocalServer::handlePluginAsset() const {
   }
 
   const char* contentType = "application/octet-stream";
-  if (filename.endsWith(".png")) contentType = "image/png";
-  else if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) contentType = "image/jpeg";
-  else if (filename.endsWith(".svg")) contentType = "image/svg+xml";
-  else if (filename.endsWith(".webp")) contentType = "image/webp";
+  if (filename.endsWith(".png"))
+    contentType = "image/png";
+  else if (filename.endsWith(".jpg") || filename.endsWith(".jpeg"))
+    contentType = "image/jpeg";
+  else if (filename.endsWith(".svg"))
+    contentType = "image/svg+xml";
+  else if (filename.endsWith(".webp"))
+    contentType = "image/webp";
 
   server->setContentLength(contents.size());
   server->send(200, contentType, "");
@@ -1210,60 +1297,64 @@ void LocalServer::handleFileListData() const {
   bool seenFirst = false;
   JsonDocument doc;
 
-  scanFiles(currentPath.c_str(), [this, &currentPath, &output, &doc, &seenFirst](const FileInfo& info) {
-    doc.clear();
-    doc["name"] = info.name;
-    doc["size"] = info.size;
-    doc["isDirectory"] = info.isDirectory;
-    doc["isEpub"] = info.isEpub;
-    if (info.isDirectory) {
-      String folderPath = currentPath;
-      if (!folderPath.endsWith("/")) folderPath += "/";
-      folderPath += info.name;
-      const char* thumbnailNames[] = {"thumb.jpg", "thumb.png", "thumb.bmp"};
-      for (const char* thumbnailName : thumbnailNames) {
-        String thumbnailPath = folderPath + "/" + thumbnailName;
-        if (!SdMan.exists(thumbnailPath.c_str())) continue;
-        String thumbnailUrl = "/download?path=";
-        thumbnailUrl += thumbnailPath;
-        thumbnailUrl += "&inline=1";
-        doc["thumbnailUrl"] = thumbnailUrl;
-        break;
-      }
-    }
+  scanFiles(
+      currentPath.c_str(),
+      [this, &currentPath, &output, &doc, &seenFirst](const FileInfo& info) {
+        doc.clear();
+        doc["name"] = info.name;
+        doc["size"] = info.size;
+        doc["isDirectory"] = info.isDirectory;
+        doc["isEpub"] = info.isEpub;
+        if (info.isDirectory) {
+          String folderPath = currentPath;
+          if (!folderPath.endsWith("/")) folderPath += "/";
+          folderPath += info.name;
+          const char* thumbnailNames[] = {"thumb.jpg", "thumb.png", "thumb.bmp"};
+          for (const char* thumbnailName : thumbnailNames) {
+            String thumbnailPath = folderPath + "/" + thumbnailName;
+            if (!SdMan.exists(thumbnailPath.c_str())) continue;
+            String thumbnailUrl = "/download?path=";
+            thumbnailUrl += thumbnailPath;
+            thumbnailUrl += "&inline=1";
+            doc["thumbnailUrl"] = thumbnailUrl;
+            break;
+          }
+        }
 #ifndef INX_SIMULATOR_WEB_ONLY
-    // The Books grid (epub_page.js) draws item.coverUrl; without it every book is a placeholder.
-    if (info.isEpub) {
-      String bookPath = currentPath;
-      if (!bookPath.endsWith("/")) bookPath += "/";
-      bookPath += info.name;
-      const std::string cachePath = epubCachePathForBookPath(bookPath.c_str());
-      const char* coverNames[] = {"thumb.jpg", "thumb.png", "thumb.bmp", "cover.jpg", "cover.bmp"};
-      for (const char* coverName : coverNames) {
-        const std::string coverPath = cachePath + "/" + coverName;
-        if (!SdMan.exists(coverPath.c_str())) continue;
-        String coverUrl = "/download?path=";
-        coverUrl += coverPath.c_str();
-        coverUrl += "&inline=1";
-        doc["coverUrl"] = coverUrl;
-        break;
-      }
-    }
+        // The Books grid (epub_page.js) draws item.coverUrl; without it every book is a placeholder.
+        if (info.isEpub) {
+          String bookPath = currentPath;
+          if (!bookPath.endsWith("/")) bookPath += "/";
+          bookPath += info.name;
+          const std::string cachePath = epubCachePathForBookPath(bookPath.c_str());
+          const char* coverNames[] = {"thumb.jpg", "thumb.png", "thumb.bmp", "cover.jpg", "cover.bmp"};
+          for (const char* coverName : coverNames) {
+            const std::string coverPath = cachePath + "/" + coverName;
+            if (!SdMan.exists(coverPath.c_str())) continue;
+            String coverUrl = "/download?path=";
+            coverUrl += coverPath.c_str();
+            coverUrl += "&inline=1";
+            doc["coverUrl"] = coverUrl;
+            break;
+          }
+        }
 #endif
 
-    const size_t written = serializeJson(doc, output, outputSize);
-    if (written >= outputSize) {
-      INX_SERIAL.printf("[%lu] [WEB] Skipping file entry with oversized JSON for name: %s\n", millis(), info.name.c_str());
-      return;
-    }
+        const size_t written = serializeJson(doc, output, outputSize);
+        if (written >= outputSize) {
+          INX_SERIAL.printf("[%lu] [WEB] Skipping file entry with oversized JSON for name: %s\n", millis(),
+                            info.name.c_str());
+          return;
+        }
 
-    if (seenFirst) {
-      server->sendContent(",");
-    } else {
-      seenFirst = true;
-    }
-    server->sendContent(output);
-  }, includeHidden);
+        if (seenFirst) {
+          server->sendContent(",");
+        } else {
+          seenFirst = true;
+        }
+        server->sendContent(output);
+      },
+      includeHidden);
   server->sendContent("]");
 
   server->sendContent("");
@@ -1365,8 +1456,7 @@ void LocalServer::handlePluginApi() const {
   const String function = route.substring(separator + 1);
   JsonDocument arguments;
   if (server->hasArg("plain") && !server->arg("plain").isEmpty()) {
-    if (deserializeJson(arguments, server->arg("plain")) != DeserializationError::Ok ||
-        !arguments.is<JsonObject>()) {
+    if (deserializeJson(arguments, server->arg("plain")) != DeserializationError::Ok || !arguments.is<JsonObject>()) {
       server->send(400, "text/plain", "Plugin arguments must be a JSON object");
       return;
     }
@@ -1495,7 +1585,7 @@ static bool flushUploadBuffer() {
 
     if (written != uploadBufferPos) {
       INX_SERIAL.printf("[%lu] [WEB] [UPLOAD] Buffer flush failed: expected %d, wrote %d\n", millis(), uploadBufferPos,
-                    written);
+                        written);
       uploadBufferPos = 0;
       return false;
     }
@@ -1545,7 +1635,8 @@ void LocalServer::handleUpload() const {
       uploadPath = "/";
     }
 
-    INX_SERIAL.printf("[%lu] [WEB] [UPLOAD] START: %s to path: %s\n", millis(), uploadFileName.c_str(), uploadPath.c_str());
+    INX_SERIAL.printf("[%lu] [WEB] [UPLOAD] START: %s to path: %s\n", millis(), uploadFileName.c_str(),
+                      uploadPath.c_str());
 
     String filePath = uploadPath;
     if (!filePath.endsWith("/")) filePath += "/";
@@ -1605,7 +1696,7 @@ void LocalServer::handleUpload() const {
         const unsigned long elapsed = millis() - uploadStartTime;
         const float kbps = (elapsed > 0) ? (uploadSize / 1024.0) / (elapsed / 1000.0) : 0;
         INX_SERIAL.printf("[%lu] [WEB] [UPLOAD] %d bytes (%.1f KB), %.1f KB/s, %d writes\n", millis(), uploadSize,
-                      uploadSize / 1024.0, kbps, writeCount);
+                          uploadSize / 1024.0, kbps, writeCount);
         lastLoggedSize = uploadSize;
       }
     }
@@ -1623,9 +1714,9 @@ void LocalServer::handleUpload() const {
         const float avgKbps = (elapsed > 0) ? (uploadSize / 1024.0) / (elapsed / 1000.0) : 0;
         const float writePercent = (elapsed > 0) ? (totalWriteTime * 100.0 / elapsed) : 0;
         INX_SERIAL.printf("[%lu] [WEB] [UPLOAD] Complete: %s (%d bytes in %lu ms, avg %.1f KB/s)\n", millis(),
-                      uploadFileName.c_str(), uploadSize, elapsed, avgKbps);
+                          uploadFileName.c_str(), uploadSize, elapsed, avgKbps);
         INX_SERIAL.printf("[%lu] [WEB] [UPLOAD] Diagnostics: %d writes, total write time: %lu ms (%.1f%%)\n", millis(),
-                      writeCount, totalWriteTime, writePercent);
+                          writeCount, totalWriteTime, writePercent);
 
         String filePath = uploadPath;
         if (!filePath.endsWith("/")) filePath += "/";
@@ -2031,7 +2122,7 @@ void LocalServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payload,
           filePath += wsUploadFileName;
 
           INX_SERIAL.printf("[%lu] [WS] Starting upload: %s (%d bytes) to %s\n", millis(), wsUploadFileName.c_str(),
-                        wsUploadSize, filePath.c_str());
+                            wsUploadSize, filePath.c_str());
 
           esp_task_wdt_reset();
           if (SdMan.exists(filePath.c_str())) {
@@ -2093,7 +2184,7 @@ void LocalServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payload,
         float kbps = (elapsed > 0) ? (wsUploadSize / 1024.0) / (elapsed / 1000.0) : 0;
 
         INX_SERIAL.printf("[%lu] [WS] Upload complete: %s (%d bytes in %lu ms, %.1f KB/s)\n", millis(),
-                      wsUploadFileName.c_str(), wsUploadSize, elapsed, kbps);
+                          wsUploadFileName.c_str(), wsUploadSize, elapsed, kbps);
 
         String filePath = wsUploadPath;
         if (!filePath.endsWith("/")) filePath += "/";
@@ -2336,9 +2427,8 @@ void LocalServer::handleSettingsUpdate() const {
       changed = true;
     } else if (strcmp(key, "keyboardLayout") == 0) {
       const int v = static_cast<int>(value);
-      SETTINGS.keyboardLayout = (v >= 0 && v < SystemSetting::KEYBOARD_LAYOUT_COUNT)
-                                    ? static_cast<uint8_t>(v)
-                                    : SystemSetting::KEYBOARD_QWERTY;
+      SETTINGS.keyboardLayout = (v >= 0 && v < SystemSetting::KEYBOARD_LAYOUT_COUNT) ? static_cast<uint8_t>(v)
+                                                                                     : SystemSetting::KEYBOARD_QWERTY;
       changed = true;
     } else if (strcmp(key, "systemTextSize") == 0) {
       const int v = static_cast<int>(value);
@@ -2351,9 +2441,8 @@ void LocalServer::handleSettingsUpdate() const {
       changed = true;
     } else if (strcmp(key, "thumbnailSize") == 0) {
       const int v = static_cast<int>(value);
-      SETTINGS.thumbnailSize = (v >= 0 && v < SystemSetting::THUMBNAIL_SIZE_COUNT)
-                                   ? static_cast<uint8_t>(v)
-                                   : SystemSetting::THUMBNAIL_ACTUAL;
+      SETTINGS.thumbnailSize = (v >= 0 && v < SystemSetting::THUMBNAIL_SIZE_COUNT) ? static_cast<uint8_t>(v)
+                                                                                   : SystemSetting::THUMBNAIL_ACTUAL;
       changed = true;
     } else if (strcmp(key, "shakePageTurn") == 0) {
       const int motionMode = static_cast<int>(value);
@@ -2373,23 +2462,20 @@ void LocalServer::handleSettingsUpdate() const {
       readerChanged = true;
     } else if (strcmp(key, "readerImageGrayscale") == 0) {
       READER_SETTINGS.readerImageGrayscale = (value >= 0 && value < SystemSetting::READER_IMAGE_QUALITY_COUNT)
-                                          ? (uint8_t)value
-                                          : SystemSetting::READER_IMAGE_LOW;
+                                                 ? (uint8_t)value
+                                                 : SystemSetting::READER_IMAGE_LOW;
       readerChanged = true;
     } else if (strcmp(key, "shortPwrBtn") == 0) {
-      SETTINGS.shortPwrBtn = value == SystemSetting::SHORT_PWRBTN::SLEEP
-                                 ? SystemSetting::SHORT_PWRBTN::SLEEP
-                                 : SystemSetting::SHORT_PWRBTN::PAGE_REFRESH;
+      SETTINGS.shortPwrBtn = value == SystemSetting::SHORT_PWRBTN::SLEEP ? SystemSetting::SHORT_PWRBTN::SLEEP
+                                                                         : SystemSetting::SHORT_PWRBTN::PAGE_REFRESH;
       changed = true;
     } else if (strcmp(key, "sleepTimeout") == 0) {
-      SETTINGS.sleepTimeout = (value >= 0 && value < SystemSetting::SLEEP_TIMEOUT_COUNT)
-                                  ? static_cast<uint8_t>(value)
-                                  : SystemSetting::SLEEP_10_MIN;
+      SETTINGS.sleepTimeout = (value >= 0 && value < SystemSetting::SLEEP_TIMEOUT_COUNT) ? static_cast<uint8_t>(value)
+                                                                                         : SystemSetting::SLEEP_10_MIN;
       changed = true;
     } else if (strcmp(key, "bootSetting") == 0) {
-      SETTINGS.bootSetting = (value >= 0 && value < SystemSetting::BOOT_SETTING_COUNT)
-                                 ? static_cast<uint8_t>(value)
-                                 : SystemSetting::RECENT_PAGE;
+      SETTINGS.bootSetting = (value >= 0 && value < SystemSetting::BOOT_SETTING_COUNT) ? static_cast<uint8_t>(value)
+                                                                                       : SystemSetting::RECENT_PAGE;
       changed = true;
     } else if (strcmp(key, "pageAutoTurnSeconds") == 0) {
       int v = static_cast<int>(value);
@@ -2512,6 +2598,59 @@ void LocalServer::handleKOReaderPost() const {
 
   server->send(200, "application/json", "{\"status\":\"ok\"}");
 }
+
+#if INX_HAS_AUDIO_MODULE
+void LocalServer::handleAudiobookshelfGet() const {
+  JsonDocument doc;
+  doc["serverUrl"] = Abs::serverUrl();
+  doc["username"] = Abs::username();
+  doc["signedIn"] = Abs::signedIn();
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+/**
+ * Signs in now: the server keeps no password, only the tokens /login returns (Abs::signIn), so
+ * a wrong address or password is reported here rather than on the device later. Blocks while the
+ * server answers; the tokens reach the card through Abs::service().
+ */
+void LocalServer::handleAudiobookshelfPost() const {
+  JsonDocument doc;
+  if (!server->hasArg("plain") || deserializeJson(doc, server->arg("plain"))) {
+    server->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+  const std::string serverUrl = doc["serverUrl"] | "";
+  const std::string username = doc["username"] | "";
+  const std::string password = doc["password"] | "";
+  const std::string previousServer = Abs::serverUrl();
+  const std::string previousUser = Abs::username();
+  std::string error;
+  JsonDocument reply;
+  if (!Abs::signIn(serverUrl, username, password, error)) {
+    reply["error"] = error;
+    String json;
+    serializeJson(reply, json);
+    server->send(400, "application/json", json);
+    return;
+  }
+  // Another server or account: the cached libraries, shelves and index are not its.
+  if (Abs::serverUrl() != previousServer || Abs::username() != previousUser) AbsLibrary::clear();
+  reply["status"] = "ok";
+  reply["serverUrl"] = Abs::serverUrl();
+  reply["username"] = Abs::username();
+  String json;
+  serializeJson(reply, json);
+  server->send(200, "application/json", json);
+}
+
+void LocalServer::handleAudiobookshelfDelete() const {
+  Abs::signOut();
+  AbsLibrary::clear();
+  server->send(200, "application/json", "{\"status\":\"ok\"}");
+}
+#endif
 
 #ifndef INX_SIMULATOR_WEB_ONLY
 void LocalServer::handleGeminiGet() const {

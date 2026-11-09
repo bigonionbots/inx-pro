@@ -311,6 +311,33 @@ Deleted successfully
 
 ---
 
+### `/api/audiobookshelf` - Audiobookshelf Sign-in (`t5s3_audio` only)
+
+Only firmware built with the audio module (`INX_HAS_AUDIO_MODULE`) has these routes; the Settings
+page shows its Audiobookshelf section only when the GET answers. The device never stores the
+password: POST signs in with it at once (`POST /login` on the server) and keeps the tokens that
+come back, as signing in on the device does.
+
+**GET** returns the current account:
+```json
+{"serverUrl": "https://abs.example.com", "username": "me", "signedIn": true}
+```
+
+**POST** signs in. It blocks until the server answers.
+```json
+{"serverUrl": "abs.example.com", "username": "me", "password": "secret"}
+```
+- An address without a scheme gets `https://`.
+- Signing in to another server or account clears the cached libraries, shelves and index.
+- **200:** `{"status": "ok", "serverUrl": "https://abs.example.com", "username": "me"}`
+- **400:** `{"error": "..."}`, e.g. `Wrong username or password`, `Server name not found: ...`,
+  `Could not reach ...`.
+
+**DELETE** signs out: it tells the server when it can, forgets the tokens and clears the cached
+libraries. Downloaded books stay on the card. **200:** `{"status": "ok"}`
+
+---
+
 ## WebSocket Endpoint
 
 ### Port 81 - Fast Binary Upload

@@ -137,6 +137,16 @@
         <div class="setting-item"><span class="setting-label">Server URL</span><div class="setting-control"><input id="koreaderServerUrl" type="text" placeholder="https://sync.koreader.rocks"></div></div>
         <div class="setting-item"><span class="setting-label">Document Match Method</span><div class="setting-control"><select id="koreaderMatchMethod"><option value="0">Filename</option><option value="1">Binary (MD5)</option></select></div></div>
       </section>
+
+      <section id="absSettings" class="settings-section" hidden>
+        <div class="section-header"><h2>Audiobookshelf</h2></div>
+        <p class="hint">Sign in signs the device in right away. The password is not stored: the device keeps the server's sign-in tokens.</p>
+        <p id="absStatus" class="hint"></p>
+        <div class="setting-item"><span class="setting-label">Server URL</span><div class="setting-control"><input id="absServerUrl" type="text" placeholder="https://abs.example.com" autocomplete="off"></div></div>
+        <div class="setting-item"><span class="setting-label">Username</span><div class="setting-control"><input id="absUsername" type="text" placeholder="Username" autocomplete="off"></div></div>
+        <div class="setting-item"><span class="setting-label">Password</span><div class="setting-control"><input id="absPassword" type="password" placeholder="Password" autocomplete="new-password"></div></div>
+        <div class="wifi-form-buttons"><button id="absSignInBtn" class="btn-primary" type="button" onclick="absSignIn()">Sign in</button><button id="absSignOutBtn" class="btn-secondary" type="button" onclick="absSignOut()">Sign out</button></div>
+      </section>
     </section>
 
     <section id="reader-tab" class="tab-content">
@@ -247,7 +257,7 @@
         const response = await fetch('/api/settings');
         settingsData = await response.json();
         populateSettings();
-        await Promise.all([loadWifiNetworks(), loadOpdsServers(), loadKOReaderSettings()]);
+        await Promise.all([loadWifiNetworks(), loadOpdsServers(), loadKOReaderSettings(), loadAbsSettings()]);
       } catch (error) { showToast('Failed to load settings', true); }
     }
     async function saveSetting(key, value) {
@@ -286,6 +296,42 @@
     async function removeOpdsServer(name) { if (!confirm('Remove "' + name + '"?')) return; const response = await fetch('/api/opds/' + encodeURIComponent(name), {method: 'DELETE'}); if (response.ok) { await loadOpdsServers(); showToast('Removed ' + name); } else showToast('Failed to remove server', true); }
     async function loadKOReaderSettings() { try { const response = await fetch('/api/koreader'); const data = await response.json(); document.getElementById('koreaderUsername').value = data.username || ''; document.getElementById('koreaderServerUrl').value = data.serverUrl || ''; document.getElementById('koreaderMatchMethod').value = data.matchMethod || 0; } catch (_) {} }
     async function saveKOReaderSettings() { const password = document.getElementById('koreaderPassword').value; const body = {username: document.getElementById('koreaderUsername').value, serverUrl: document.getElementById('koreaderServerUrl').value, matchMethod: Number(document.getElementById('koreaderMatchMethod').value)}; if (password) body.password = password; try { return (await fetch('/api/koreader', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})).ok; } catch (_) { return false; } }
+    // Audiobookshelf: only firmware with the audio module answers /api/audiobookshelf.
+    function renderAbsStatus(data) {
+      document.getElementById('absStatus').textContent = data.signedIn ? 'Signed in as ' + (data.username || '?') + ' on ' + (data.serverUrl || '?') + '.' : 'Not signed in.';
+      document.getElementById('absSignOutBtn').disabled = !data.signedIn;
+    }
+    async function loadAbsSettings() {
+      try {
+        const response = await fetch('/api/audiobookshelf');
+        if (!response.ok) return;
+        const data = await response.json();
+        document.getElementById('absSettings').hidden = false;
+        document.getElementById('absServerUrl').value = data.serverUrl || '';
+        document.getElementById('absUsername').value = data.username || '';
+        renderAbsStatus(data);
+      } catch (_) {}
+    }
+    async function absSignIn() {
+      const body = {serverUrl: document.getElementById('absServerUrl').value.trim(), username: document.getElementById('absUsername').value.trim(), password: document.getElementById('absPassword').value};
+      if (!body.serverUrl || !body.username) return showToast('Enter the server URL and username', true);
+      const button = document.getElementById('absSignInBtn');
+      button.disabled = true; button.textContent = 'Signing in…';
+      try {
+        const response = await fetch('/api/audiobookshelf', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) { document.getElementById('absPassword').value = ''; renderAbsStatus({signedIn: true, username: data.username, serverUrl: data.serverUrl}); document.getElementById('absServerUrl').value = data.serverUrl || body.serverUrl; showToast('Signed in to Audiobookshelf'); }
+        else showToast(data.error || 'Sign in failed', true);
+      } catch (_) { showToast('Sign in failed', true); }
+      button.disabled = false; button.textContent = 'Sign in';
+    }
+    async function absSignOut() {
+      if (!confirm('Sign out of Audiobookshelf? Downloaded books stay on the card.')) return;
+      try {
+        const response = await fetch('/api/audiobookshelf', {method: 'DELETE'});
+        if (response.ok) { renderAbsStatus({signedIn: false}); showToast('Signed out'); } else showToast('Sign out failed', true);
+      } catch (_) { showToast('Sign out failed', true); }
+    }
     loadSettings();
   </script>
 </body>
