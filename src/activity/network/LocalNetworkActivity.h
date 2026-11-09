@@ -49,8 +49,7 @@ class LocalNetworkActivity final : public ActivityWithSubactivity {
         renderingMutex(nullptr),
         updateRequired(false),
         state(LocalNetworkState::WIFI_SELECTION),
-        onGoBack(onGoBack) {
-  }
+        onGoBack(onGoBack) {}
 
   /**
    * @brief Called when activity becomes active
@@ -110,6 +109,9 @@ class LocalNetworkActivity final : public ActivityWithSubactivity {
   /** @brief Initializes and starts the web server */
   void startWebServer();
 
+  /** @brief Online (through the picker or already): mDNS and the web server */
+  void onConnected();
+
   /** @brief Stops the web server and cleans up resources */
   void stopWebServer();
 
@@ -119,6 +121,8 @@ class LocalNetworkActivity final : public ActivityWithSubactivity {
   LocalNetworkState state;          /**< Current activity state */
   bool wifiSelectionResultPending = false;
   bool wifiSelectionConnected = false;
+  bool holdsAbsWifi = false;  ///< counted as a user of on-demand Wi-Fi (audio module builds)
+  bool resumeAudio = false;   ///< a book was playing on entering: play it again on leaving
 
   std::string connectedIP;                /**< IP address of connected WiFi */
   std::string connectedSSID;              /**< SSID of connected WiFi network */

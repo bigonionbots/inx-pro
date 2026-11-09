@@ -95,6 +95,18 @@ bool open(const Book& book);
 void stop();
 
 void togglePause();
+/**
+ * For a screen that needs the device to itself (the web server): pauses the book if it plays and
+ * stops a stream (its connection and memory) as a long pause does. True if it was playing.
+ * Main loop.
+ */
+bool suspendForScreen();
+/**
+ * After suspendForScreen(): plays again if it was playing. `wifiHeld`: the caller held an
+ * AbsWifi user and hands it over; the player releases it once the stream has had time to take
+ * its own, so Wi-Fi does not drop in between. Main loop.
+ */
+void resumeAfterScreen(bool wasPlaying, bool wifiHeld);
 void skip(int32_t deltaMs);
 void nextTrack();
 void previousTrack();

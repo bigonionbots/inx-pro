@@ -66,6 +66,8 @@ constexpr uint32_t RESUME_FETCH_AFTER_MS = 60000;
  */
 constexpr uint32_t PAUSED_WIFI_OFF_MS = 3 * 60 * 1000;
 constexpr const char* WIFI_PARKED_MESSAGE = "Wi-Fi off while paused";
+/** How long resumeAfterScreen() keeps the Wi-Fi it was handed, for the stream to take over. */
+constexpr uint32_t HANDED_WIFI_HOLD_MS = 20000;
 constexpr const char* WIFI_RECONNECTING_MESSAGE = "Reconnecting Wi-Fi...";
 constexpr uint32_t SYNC_TOLERANCE_MS = 2000;
 constexpr const char* ABS_KEY_PREFIX = "abs:";
@@ -492,6 +494,7 @@ std::vector<TrackInfo> tracks;
 std::vector<AudioChapter> bookChapters;  // in the whole book; empty when the book has none
 std::string coverPath;                   // see View::coverPath
 uint32_t pausedAtMs = 0;                 // when the current pause began
+uint32_t handedWifiAtMs = 0;             // resumeAfterScreen() holds an AbsWifi user since then (0: none)
 bool wifiParked = false;                 // streamed book paused long enough to stop the stream
 std::string bookAuthor;                  // streamed books: for the recent list
 int track = 0;
@@ -1263,6 +1266,32 @@ void togglePause() {
   }
 }
 
+bool suspendForScreen() {
+  if (!isOpen || finished) return false;
+  const bool wasPlaying = !paused;
+  if (wasPlaying) togglePause();
+  if (remote && streamActive && !wifiParked) {
+    stopStream();
+    wifiParked = true;
+    message = WIFI_PARKED_MESSAGE;
+  }
+  AudioModule::logf("Player: suspended for a screen%s", wasPlaying ? " (was playing)" : "");
+  return wasPlaying;
+}
+
+void resumeAfterScreen(const bool wasPlaying, const bool wifiHeld) {
+  const bool resume = wasPlaying && isOpen && paused && !finished;
+  if (resume) togglePause();
+  if (wifiHeld) {
+    if (resume && remote) {
+      if (handedWifiAtMs != 0) AbsWifi::release();  // one hand-over at a time
+      handedWifiAtMs = millis() | 1;
+    } else {
+      AbsWifi::release();
+    }
+  }
+}
+
 void skip(const int32_t deltaMs) {
   if (!isOpen || (!source && !remote)) return;
   const int64_t target = static_cast<int64_t>(positionMs) + deltaMs;
@@ -1407,6 +1436,11 @@ void service() {
     AudioModule::logf("Player: paused %lu min, Wi-Fi released", static_cast<unsigned long>(PAUSED_WIFI_OFF_MS / 60000));
   }
   if (retryStreamAtMs != 0 && static_cast<int32_t>(millis() - retryStreamAtMs) >= 0) startStream(positionMs);
+  // The Wi-Fi hold resumeAfterScreen() took over: the resumed stream holds its own by now.
+  if (handedWifiAtMs != 0 && millis() - handedWifiAtMs >= HANDED_WIFI_HOLD_MS) {
+    handedWifiAtMs = 0;
+    AbsWifi::release();
+  }
 
   updateFromFeeder();
   updateFromModule();

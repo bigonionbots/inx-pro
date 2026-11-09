@@ -272,6 +272,14 @@ Network errors are retried. If retries fail, playback restarts from the current 
 and lets Wi-Fi go ("Wi-Fi off while paused"); Play reconnects with the saved networks and
 restarts it at the same place ("Reconnecting Wi-Fi..." until it plays).
 
+**Manage via WiFi** (the web server, `LocalNetworkActivity`) serves on the current connection
+when Wi-Fi is already up, instead of opening the picker, which disconnects to scan. Streaming and
+serving at once froze the device, so the screen pauses a playing book
+(`AudioPlayer::suspendForScreen()`: a stream stops and lets go of its connection) and plays it
+again on leaving (`resumeAfterScreen()`). It holds an `AbsWifi` user while open, so Wi-Fi stays
+up, and hands that hold to the player for 20 s on leaving, so a resumed stream does not find
+Wi-Fi just turned off.
+
 **Downloads.** A book goes into `/Audiobooks/<title>/`, together with `.abs.json` (item id,
 server track order, per-track offsets, chapters, `complete`). An incomplete download is hidden
 from the local list.

@@ -8,12 +8,16 @@
 #include <ESPmDNS.h>
 #include <GfxRenderer.h>
 #include <WiFi.h>
-#include <esp_task_wdt.h>
 #include <esp_heap_caps.h>
+#include <esp_task_wdt.h>
 #include <qrcode.h>
 
-#include "activity/page/SubPage.h"
 #include "WifiSelectionActivity.h"
+#include "activity/page/SubPage.h"
+#if INX_HAS_AUDIO_MODULE
+#include "abs/AbsWifi.h"
+#include "system/AudioPlayer.h"
+#endif
 #include "images/Computer.h"
 #include "images/Phone.h"
 #include "images/Transfer.h"
@@ -59,7 +63,7 @@ std::string truncateString(const std::string& str, int maxLength) {
   result.replace(maxLength - 3, result.length() - (maxLength - 3), "...");
   return result;
 }
-}
+}  // namespace
 
 /**
  * @brief Static trampoline function for FreeRTOS task creation
@@ -80,14 +84,55 @@ void LocalNetworkActivity::onEnter() {
 
   renderingMutex = xSemaphoreCreateMutex();
   updateRequired = true;
-  state = LocalNetworkState::WIFI_SELECTION;
 
-  enterNewActivity(
-      new WifiSelectionActivity(renderer, mappedInput, [this](bool connected) { onWifiSelectionComplete(connected); }));
+  // Already online (streaming an audiobook, say): serve on that connection. The picker would
+  // disconnect to scan, cutting off whatever is using it.
+  const bool online = (WiFi.getMode() & WIFI_MODE_STA) && WiFi.status() == WL_CONNECTED;
+#if INX_HAS_AUDIO_MODULE
+  // The web server wants the device to itself: a playing book pauses (a stream lets go of its
+  // connection and memory) and plays again on leaving. Hold Wi-Fi first, so the stream letting go
+  // does not turn it off.
+  if (online) {
+    std::string ignored;
+    holdsAbsWifi = AbsWifi::acquire(ignored);
+  }
+  resumeAudio = AudioPlayer::suspendForScreen();
+#endif
+  state = online ? LocalNetworkState::SERVER_STARTING : LocalNetworkState::WIFI_SELECTION;
+  if (!online) {
+    enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
+                                               [this](bool connected) { onWifiSelectionComplete(connected); }));
+  }
 
   constexpr uint32_t LOCALNET_DISPLAY_TASK_STACK = 8192;
   xTaskCreateWithCaps(&LocalNetworkActivity::taskTrampoline, "LocalNetTask", LOCALNET_DISPLAY_TASK_STACK, this, 1,
                       &displayTaskHandle, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+  if (online) {
+    connectedIP = WiFi.localIP().toString().c_str();
+    INX_SERIAL.printf("[%lu] [LOCALNET] Already on Wi-Fi, IP: %s\n", millis(), connectedIP.c_str());
+    onConnected();
+  }
+}
+
+void LocalNetworkActivity::onConnected() {
+  connectedSSID = WiFi.SSID().c_str();
+#if INX_HAS_AUDIO_MODULE
+  // While this screen serves, on-demand Wi-Fi (a stream letting go after a pause) must not turn
+  // the radio off under it. Wi-Fi is up, so this only counts a user.
+  if (!holdsAbsWifi) {
+    std::string ignored;
+    holdsAbsWifi = AbsWifi::acquire(ignored);
+  }
+#endif
+  state = LocalNetworkState::SERVER_STARTING;
+  updateRequired = true;
+
+  if (MDNS.begin(AP_HOSTNAME)) {
+    INX_SERIAL.printf("[%lu] [LOCALNET] mDNS started: http://%s.local/\n", millis(), AP_HOSTNAME);
+  }
+
+  startWebServer();
 }
 
 /**
@@ -99,6 +144,13 @@ void LocalNetworkActivity::onExit() {
   stopWebServer();
   MDNS.end();
   wifiSelectionResultPending = false;
+#if INX_HAS_AUDIO_MODULE
+  // Play on if it was playing; the player keeps our Wi-Fi hold until the stream has its own.
+  // Otherwise Wi-Fi goes off only if on-demand Wi-Fi turned it on and nothing else uses it.
+  AudioPlayer::resumeAfterScreen(resumeAudio, holdsAbsWifi);
+  holdsAbsWifi = false;
+  resumeAudio = false;
+#endif
 
   if (renderingMutex) {
     xSemaphoreTake(renderingMutex, portMAX_DELAY);
@@ -135,7 +187,8 @@ void LocalNetworkActivity::startWebServer() {
 
   if (webServer->isRunning()) {
     state = LocalNetworkState::SERVER_RUNNING;
-    INX_SERIAL.printf("[%lu] [LOCALNET] Web server started successfully at http://%s/\n", millis(), connectedIP.c_str());
+    INX_SERIAL.printf("[%lu] [LOCALNET] Web server started successfully at http://%s/\n", millis(),
+                      connectedIP.c_str());
 
     updateRequired = true;
   } else {
@@ -174,18 +227,10 @@ void LocalNetworkActivity::loop() {
       }
 
       connectedIP = static_cast<WifiSelectionActivity*>(subActivity.get())->getConnectedIP();
-      connectedSSID = WiFi.SSID().c_str();
-      INX_SERIAL.printf("[%lu] [LOCALNET] Connected to %s, IP: %s\n", millis(), connectedSSID.c_str(),
+      INX_SERIAL.printf("[%lu] [LOCALNET] Connected to %s, IP: %s\n", millis(), WiFi.SSID().c_str(),
                         connectedIP.c_str());
       exitActivity();
-      state = LocalNetworkState::SERVER_STARTING;
-      updateRequired = true;
-
-      if (MDNS.begin(AP_HOSTNAME)) {
-        INX_SERIAL.printf("[%lu] [LOCALNET] mDNS started: http://%s.local/\n", millis(), AP_HOSTNAME);
-      }
-
-      startWebServer();
+      onConnected();
     }
     return;
   }
@@ -317,10 +362,8 @@ void LocalNetworkActivity::renderServerRunning() const {
 
   drawQRCode(qrX, qrY, hostnameUrl);
   renderer.text.centered(labelFont, detailsTop, "OPEN TRANSFER", true, EpdFontFamily::BOLD);
-  renderer.text.centered(bodyFont, detailsTop + labelLineHeight + 12, hostnameUrl.c_str(), true,
-                         EpdFontFamily::BOLD);
-  renderer.text.centered(bodyFont, detailsTop + labelLineHeight + 12 + bodyLineHeight + 8,
-                         ipUrl.c_str());
+  renderer.text.centered(bodyFont, detailsTop + labelLineHeight + 12, hostnameUrl.c_str(), true, EpdFontFamily::BOLD);
+  renderer.text.centered(bodyFont, detailsTop + labelLineHeight + 12 + bodyLineHeight + 8, ipUrl.c_str());
 
   const int hintY = screenHeight - 92;
   renderer.text.centered(MONTSERRAT_8_FONT_ID, hintY, "Keep this screen open while transferring");
@@ -334,8 +377,7 @@ void LocalNetworkActivity::drawQRCode(const int x, const int y, const std::strin
   for (uint8_t cy = 0; cy < qrcode.size; ++cy) {
     for (uint8_t cx = 0; cx < qrcode.size; ++cx) {
       if (qrcode_getModule(&qrcode, cx, cy)) {
-        renderer.rectangle.fill(x + QR_PIXEL_SIZE * cx, y + QR_PIXEL_SIZE * cy,
-                                QR_PIXEL_SIZE, QR_PIXEL_SIZE, true);
+        renderer.rectangle.fill(x + QR_PIXEL_SIZE * cx, y + QR_PIXEL_SIZE * cy, QR_PIXEL_SIZE, QR_PIXEL_SIZE, true);
       }
     }
   }
