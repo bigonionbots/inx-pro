@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "activity/page/SubPage.h"
 #include "system/AudioModule.h"
@@ -207,9 +208,32 @@ void AudioModuleActivity::render() {
   y += logLineHeight;
   const int bottom = screenHeight - 10;
   const size_t fit = y < bottom ? static_cast<size_t>((bottom - y) / logLineHeight) : 0;
-  for (const std::string& line : AudioModule::recentLog(fit)) {
-    const std::string clipped = renderer.text.truncate(smallFont, line.c_str(), valueMaxW);
-    renderer.text.render(smallFont, 20, y, clipped.c_str(), true, EpdFontFamily::REGULAR);
+  // Long lines (error details) wrap; the newest lines that fit, oldest first.
+  const auto wrap = [&](const std::string& line) {
+    std::vector<std::string> rows;
+    size_t start = 0;
+    while (start < line.size()) {
+      size_t end = line.size();
+      while (end > start + 1 &&
+             renderer.text.getWidth(smallFont, line.substr(start, end - start).c_str()) > valueMaxW) {
+        const size_t space = line.rfind(' ', end - 1);
+        end = space != std::string::npos && space > start ? space : end - 1;
+      }
+      rows.push_back(line.substr(start, end - start));
+      start = end;
+      while (start < line.size() && line[start] == ' ') ++start;
+    }
+    return rows;
+  };
+  std::vector<std::string> shown;
+  const std::vector<std::string> lines = AudioModule::recentLog(fit);
+  for (auto it = lines.rbegin(); it != lines.rend() && shown.size() < fit; ++it) {
+    std::vector<std::string> rows = wrap(*it);
+    if (shown.size() + rows.size() > fit) break;
+    shown.insert(shown.begin(), rows.begin(), rows.end());
+  }
+  for (const std::string& row : shown) {
+    renderer.text.render(smallFont, 20, y, row.c_str(), true, EpdFontFamily::REGULAR);
     y += logLineHeight;
   }
 

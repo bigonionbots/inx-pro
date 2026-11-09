@@ -251,7 +251,21 @@ token unused for 30 days (the server default) means signing in again.
 
 **Streaming.** `HttpAudioFile` reads a track with HTTP Range requests (`GET
 /api/items/:id/file/:ino`, served by Express `sendFile`). It keeps three 128 KB blocks in PSRAM:
-the audio being played, plus the MP4 sample tables elsewhere in the file. Underneath, the same
+the audio being played, plus the MP4 sample tables elsewhere in the file. Blocks read one after
+another come from a single open-ended request (`Range: bytes=N-`) kept open between them; other
+misses (the MP4 tables, the first block after a seek) close that stream and are one `bytes=a-b`
+request each; the next block in sequence reopens it. A fresh connection per block paid a TLS
+handshake each (about a second through a Cloudflare tunnel), held streaming to ~50 KB/s and made
+playback stop to buffer. A progress sync's check, save and read-back share one connection
+(`Abs::KeepConnection`), closed when the sync is done.
+
+**Internal RAM.** Every open HTTP client holds its buffers until it closes, and `malloc()` serves
+blocks of 4 KB or less (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`) from internal RAM. With 4 KB
+buffers, a stream, a sync and a stale stream open together left 4-6 KB of internal RAM, and USB
+(`ESP_ERR_NO_MEM`) and TLS failed. Audiobookshelf clients use `Abs::HTTP_RX_BUFFER` /
+`HTTP_TX_BUFFER`, both over 4 KB so they come from PSRAM, and keep at most one stream open.
+
+Underneath, the same
 `Mp3Source`/`Mp4Source` readers run on a feeder task, so a streamed book needs no SD access.
 Network errors are retried. If retries fail, playback restarts from the current position after
 5 s. Wi-Fi stays on while streaming, but a streamed book paused for 3 minutes stops its stream
@@ -282,9 +296,8 @@ so it does not fight the picker for the radio; once connected, failed books try 
 How a book downloads:
 - each track is one streaming request from where the card's copy ends (`Range: bytes=N-`), so
   a download pays one TLS handshake per track; it reconnects from where it stopped when the
-  connection drops (up to 5 times in a row without progress). Fetching it in 128 KB ranges, as
-  streaming playback does to seek, cost a handshake per range and ran at ~50 KB/s through a
-  Cloudflare tunnel;
+  connection drops (up to 5 times in a row without progress). Fetching it in 128 KB ranges on
+  fresh connections cost a handshake per range and ran at ~50 KB/s through a Cloudflare tunnel;
 - the network task (one long-lived task, stack in PSRAM) fills 64 KB PSRAM buffers; both are
   created at boot, because the task's control block needs internal RAM, which a long session can
   run out of ("Cannot start the download: out of memory", with the free memory);
@@ -301,10 +314,21 @@ How a book downloads:
 - if both changed, the further position wins.
 
 Sync happens:
-- **fetch:** on opening a book;
-- **push:** on pause, track change, stop and finish, plus every 60 s while streaming.
+- **fetch:** on opening a book, and on resuming after a pause of a minute or more (it may have
+  been listened to on another device meanwhile; the server's position is adopted by the rules
+  above, which shows "Position synced from Audiobookshelf");
+- **push:** on pause, track change, chapter jump, stop and finish; while playing, every 15 s
+  when streaming, and every 60 s for a downloaded book, but only while Wi-Fi is already on.
 
-For a downloaded book with Wi-Fi off, a push turns Wi-Fi on briefly (`AbsWifi`) and off again.
+For a downloaded book with Wi-Fi off, an event push (pause, stop, ...) turns Wi-Fi on briefly
+(`AbsWifi`) and off again; the periodic one is skipped instead, so playback alone never turns
+the radio on.
+
+Every push first reads the server's position. If another device moved the book further since the
+last sync (not counting our own last push), the push is dropped and that position is adopted
+instead. A push can be queued before the main loop has seen a fetch result (the first periodic
+push used to leave right behind the opening fetch, carrying the T5's stale position), so without
+this check it could overwrite the newer position with an older one.
 
 **Code:**
 - `src/abs/`: `AbsClient` (API and tokens), `AbsWifi` (on-demand Wi-Fi with a user count),

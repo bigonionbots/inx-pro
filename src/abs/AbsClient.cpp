@@ -17,6 +17,7 @@
 #include <esp_tls_errors.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <mbedtls/error.h>
 #include <mbedtls/platform.h>
 
@@ -43,6 +44,9 @@ std::string user;
 std::string accessToken;
 std::string refreshToken;
 bool dirty = false;
+
+TaskHandle_t keepTask = nullptr;                // the task whose connection stays open
+esp_http_client_handle_t keptClient = nullptr;  // its client (that task only)
 
 class Guard {
  public:
@@ -129,37 +133,63 @@ std::string connectError(const esp_err_t err, const esp_err_t tlsErr, const int 
 
 bool perform(const esp_http_client_method_t method, const std::string& url, const Headers& headers,
              const std::string& body, Response& response, std::string& error) {
-  esp_http_client_config_t config = {};
-  config.url = url.c_str();
-  config.method = method;
-  config.event_handler = collectBody;
-  config.user_data = &response;
-  config.timeout_ms = HTTP_TIMEOUT_MS;
-  config.crt_bundle_attach = esp_crt_bundle_attach;
-  config.buffer_size = 4096;
-  config.buffer_size_tx = 2048;
-  esp_http_client_handle_t client = esp_http_client_init(&config);
-  if (!client) {
-    error = "HTTP client init failed";
-    return false;
-  }
-  esp_http_client_set_header(client, "User-Agent", "inx-pro/" INX_VERSION);
-  esp_http_client_set_header(client, "Accept", "application/json");
-  for (const auto& header : headers) esp_http_client_set_header(client, header.first.c_str(), header.second.c_str());
-  if (!body.empty()) {
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_post_field(client, body.data(), static_cast<int>(body.size()));
-  }
-  esp_err_t err = esp_http_client_perform(client);
-  response.status = esp_http_client_get_status_code(client);
-  // ESP-IDF 5 answers a 401 whose WWW-Authenticate is not Basic/Digest (Audiobookshelf's bearer
-  // tokens) with ESP_ERR_NOT_SUPPORTED, not ESP_OK: it is a reply, so api() can refresh the token.
-  if (err == ESP_ERR_NOT_SUPPORTED && response.status == 401) err = ESP_OK;
+  // The task that keeps its connection (KeepConnection) reuses one client; a request on a
+  // connection the server or a Wi-Fi drop closed meanwhile fails, and goes again on a new one.
+  const bool keep = keepTask && xTaskGetCurrentTaskHandle() == keepTask;
+  esp_err_t err = ESP_OK;
+  esp_err_t tlsErr = ESP_OK;
   int mbedtlsCode = 0;
   int certFlags = 0;
-  const esp_err_t tlsErr =
-      err != ESP_OK ? esp_http_client_get_and_clear_last_tls_error(client, &mbedtlsCode, &certFlags) : ESP_OK;
-  esp_http_client_cleanup(client);
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    response = Response{};
+    esp_http_client_handle_t client = keep ? keptClient : nullptr;
+    const bool reused = client != nullptr;
+    if (reused) {
+      esp_http_client_set_url(client, url.c_str());
+      esp_http_client_set_method(client, method);
+      esp_http_client_set_user_data(client, &response);
+    } else {
+      esp_http_client_config_t config = {};
+      config.url = url.c_str();
+      config.method = method;
+      config.event_handler = collectBody;
+      config.user_data = &response;
+      config.timeout_ms = HTTP_TIMEOUT_MS;
+      config.crt_bundle_attach = esp_crt_bundle_attach;
+      config.buffer_size = Abs::HTTP_RX_BUFFER;
+      config.buffer_size_tx = Abs::HTTP_TX_BUFFER;
+      client = esp_http_client_init(&config);
+      if (!client) {
+        error = "HTTP client init failed";
+        return false;
+      }
+      if (keep) keptClient = client;
+    }
+    esp_http_client_set_header(client, "User-Agent", "inx-pro/" INX_VERSION);
+    esp_http_client_set_header(client, "Accept", "application/json");
+    for (const auto& header : headers) esp_http_client_set_header(client, header.first.c_str(), header.second.c_str());
+    if (!body.empty()) {
+      esp_http_client_set_header(client, "Content-Type", "application/json");
+      esp_http_client_set_post_field(client, body.data(), static_cast<int>(body.size()));
+    } else if (reused) {
+      esp_http_client_delete_header(client, "Content-Type");
+      esp_http_client_set_post_field(client, nullptr, 0);
+    }
+    err = esp_http_client_perform(client);
+    response.status = esp_http_client_get_status_code(client);
+    // ESP-IDF 5 answers a 401 whose WWW-Authenticate is not Basic/Digest (Audiobookshelf's bearer
+    // tokens) with ESP_ERR_NOT_SUPPORTED, not ESP_OK: it is a reply, so api() can refresh the token.
+    if (err == ESP_ERR_NOT_SUPPORTED && response.status == 401) err = ESP_OK;
+    tlsErr = err != ESP_OK ? esp_http_client_get_and_clear_last_tls_error(client, &mbedtlsCode, &certFlags) : ESP_OK;
+    // The body pointer is the caller's; do not leave it (or `response`) in a kept client.
+    esp_http_client_set_post_field(client, nullptr, 0);
+    esp_http_client_set_user_data(client, nullptr);
+    if (!keep || err != ESP_OK) {
+      esp_http_client_cleanup(client);
+      if (keep) keptClient = nullptr;
+    }
+    if (err == ESP_OK || !reused) break;
+  }
   if (err != ESP_OK) {
     const bool reached = tlsErr == ESP_OK && mbedtlsCode == 0 && certFlags == 0 && err != ESP_ERR_HTTP_CONNECT;
     error = reached ? std::string("Network error: ") + esp_err_to_name(err)
@@ -295,6 +325,14 @@ static void* tlsCalloc(const size_t count, const size_t size) {
 }
 
 static void tlsFree(void* p) { heap_caps_free(p); }
+
+KeepConnection::KeepConnection() { keepTask = xTaskGetCurrentTaskHandle(); }
+
+KeepConnection::~KeepConnection() {
+  keepTask = nullptr;
+  if (keptClient) esp_http_client_cleanup(keptClient);
+  keptClient = nullptr;
+}
 
 void begin() {
   // Before any TLS session exists: they must be freed by the allocator that made them.

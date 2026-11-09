@@ -43,7 +43,84 @@ esp_err_t onHttpEvent(esp_http_client_event_t* event) {
 HttpAudioFile::HttpAudioFile(std::string url) : url_(std::move(url)) {}
 
 HttpAudioFile::~HttpAudioFile() {
+  closeStream();
   for (Block& b : blocks_) heap_caps_free(b.data);
+}
+
+void HttpAudioFile::closeStream() {
+  if (!stream_) return;
+  esp_http_client_close(stream_);
+  esp_http_client_cleanup(stream_);
+  stream_ = nullptr;
+}
+
+bool HttpAudioFile::openStream(const uint64_t start) {
+  closeStream();
+  for (int attempt = 0; attempt < 2 && !cancelled_; ++attempt) {
+    HeaderCapture capture;
+    esp_http_client_config_t config = {};
+    config.url = url_.c_str();
+    config.timeout_ms = HTTP_TIMEOUT_MS;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.buffer_size = Abs::HTTP_RX_BUFFER;
+    config.buffer_size_tx = Abs::HTTP_TX_BUFFER;
+    config.event_handler = onHttpEvent;
+    config.user_data = &capture;
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) return false;
+    char range[40];
+    snprintf(range, sizeof(range), "bytes=%llu-", static_cast<unsigned long long>(start));
+    esp_http_client_set_header(client, "Range", range);
+    esp_http_client_set_header(client, "User-Agent", "inx-pro/" INX_VERSION);
+    const std::string auth = Abs::authorization();
+    if (!auth.empty()) esp_http_client_set_header(client, "Authorization", auth.c_str());
+    int status = 0;
+    int64_t contentLength = -1;
+    if (esp_http_client_open(client, 0) == ESP_OK) {
+      contentLength = esp_http_client_fetch_headers(client);
+      status = esp_http_client_get_status_code(client);
+    }
+    // Headers are in: later events are data only, so `capture` may go.
+    esp_http_client_set_user_data(client, nullptr);
+    if (status == 206 || (status == 200 && start == 0)) {
+      if (capture.totalSize) {
+        size_ = capture.totalSize;
+      } else if (status == 200 && contentLength > 0) {
+        size_ = static_cast<uint64_t>(contentLength);
+      }
+      stream_ = client;
+      streamPos_ = start;
+      return true;
+    }
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    if (status == 401 && attempt == 0 && Abs::refreshAccess()) continue;
+    if (status == 200) streamUnsupported_ = true;  // the whole file again: ranges only from now on
+    INX_SERIAL.printf("[HTTPAUDIO] stream at %llu: HTTP %d, using range requests\n",
+                      static_cast<unsigned long long>(start), status);
+    return false;
+  }
+  return false;
+}
+
+bool HttpAudioFile::readStream(Block& into, const size_t length) {
+  size_t got = 0;
+  while (got < length && !cancelled_) {
+    const int n = esp_http_client_read(stream_, reinterpret_cast<char*>(into.data) + got, length - got);
+    if (n <= 0) break;
+    got += static_cast<size_t>(n);
+  }
+  into.length = got;
+  if (got == length || (size_ && streamPos_ + got >= size_)) {
+    streamPos_ += got;
+    return true;
+  }
+  // Dropped (or cancelled): range requests for this block; the next one reopens the stream.
+  if (!cancelled_) {
+    INX_SERIAL.printf("[HTTPAUDIO] stream dropped at %llu\n", static_cast<unsigned long long>(streamPos_ + got));
+  }
+  closeStream();
+  return false;
 }
 
 bool HttpAudioFile::fetchOnce(const uint64_t start, const size_t length, Block& into, int& status) {
@@ -52,8 +129,8 @@ bool HttpAudioFile::fetchOnce(const uint64_t start, const size_t length, Block& 
   config.url = url_.c_str();
   config.timeout_ms = HTTP_TIMEOUT_MS;
   config.crt_bundle_attach = esp_crt_bundle_attach;
-  config.buffer_size = 4096;
-  config.buffer_size_tx = 2048;
+  config.buffer_size = Abs::HTTP_RX_BUFFER;
+  config.buffer_size_tx = Abs::HTTP_TX_BUFFER;
   config.event_handler = onHttpEvent;
   config.user_data = &capture;
   esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -133,6 +210,24 @@ bool HttpAudioFile::fetch(const uint64_t index, Block& into) {
   const uint64_t start = index * BLOCK_BYTES;
   size_t length = BLOCK_BYTES;
   if (size_ && start + length > size_) length = static_cast<size_t>(size_ - start);
+
+  // Reading on from the last miss (or where the stream already is): the sequential stream.
+  const bool sequential = index == lastMiss_ + 1;
+  lastMiss_ = index;
+  if (!streamUnsupported_ && !cancelled_ && (!size_ || start < size_)) {
+    if ((!stream_ || streamPos_ != start) && sequential) openStream(start);
+    // A jump elsewhere (a seek, the MP4 tables): the stream is behind or ahead of it and only
+    // holds memory, and unread data piling up in it; the next block in sequence reopens it.
+    if (stream_ && streamPos_ != start) closeStream();
+    if (stream_ && streamPos_ == start) {
+      if (size_ && start + length > size_) length = static_cast<size_t>(size_ - start);
+      if (readStream(into, length)) {
+        into.index = index;
+        return true;
+      }
+    }
+  }
+
   uint32_t delayMs = FIRST_RETRY_DELAY_MS;
   for (int attempt = 0; attempt < ATTEMPTS && !cancelled_; ++attempt) {
     int status = 0;

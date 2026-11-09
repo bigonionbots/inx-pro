@@ -28,6 +28,15 @@ class AbsIndex;
 
 namespace Abs {
 
+/**
+ * esp_http_client buffer sizes for Audiobookshelf requests. Both are over 4 KB on purpose:
+ * malloc() serves blocks up to CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL (4096) from internal RAM, and
+ * a few clients open at once (stream, sync, covers) took enough of it that USB and TLS failed
+ * with out-of-memory errors. Larger ones come from PSRAM.
+ */
+constexpr int HTTP_RX_BUFFER = 8192;
+constexpr int HTTP_TX_BUFFER = 4352;
+
 struct Library {
   std::string id;
   std::string name;
@@ -157,6 +166,19 @@ std::string authorization();
  * certificate flags). Names the cause when it can (name not found, unreachable, certificate).
  */
 std::string describeConnectFailure(int err, int tlsErr, int mbedtlsCode, int certFlags, const std::string& url);
+/**
+ * While one exists, requests from the task that made it reuse one HTTPS connection (keep-alive)
+ * instead of a TLS handshake each, about a second through a tunnel; the connection closes with
+ * it, so it holds no memory in between. For a short run of requests (a progress sync's check,
+ * save and read-back). One at a time.
+ */
+class KeepConnection {
+ public:
+  KeepConnection();
+  ~KeepConnection();
+  KeepConnection(const KeepConnection&) = delete;
+  KeepConnection& operator=(const KeepConnection&) = delete;
+};
 /** Renews the access token after a 401. Network; any task. */
 bool refreshAccess();
 

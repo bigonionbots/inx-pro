@@ -20,6 +20,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <iterator>
 #include <memory>
 
@@ -49,7 +50,16 @@ constexpr uint32_t MODULE_RETRY_MS = 5000;
 constexpr uint32_t CONTROL_TIMEOUT_MS = 300;
 constexpr uint32_t PREVIOUS_RESTARTS_TRACK_MS = 5000;
 constexpr uint32_t STREAM_RETRY_MS = 5000;
-constexpr uint32_t REMOTE_PUSH_INTERVAL_MS = 60000;
+/**
+ * Progress pushes while playing an Audiobookshelf book: a streamed one every 15 s (Wi-Fi is on
+ * anyway); a downloaded one every minute, but only while Wi-Fi happens to be on, so playback
+ * never turns the radio on just for this (pause, track changes and stop still push, connecting
+ * if need be).
+ */
+constexpr uint32_t REMOTE_PUSH_INTERVAL_MS = 15000;
+constexpr uint32_t LOCAL_PUSH_INTERVAL_MS = 60000;
+/** Resuming after a pause this long first asks the server: another device may have moved on. */
+constexpr uint32_t RESUME_FETCH_AFTER_MS = 60000;
 /**
  * A streamed book paused this long lets go of Wi-Fi (the stream stops; the position is kept), so a
  * forgotten pause does not keep the radio on. Play reconnects and restarts the stream there.
@@ -338,10 +348,12 @@ void cancelFeed() {
 
 struct SyncRequest {
   bool push = false;
+  bool onlyIfConnected = false;  ///< skip it when Wi-Fi is off rather than turn it on
   std::string itemId;
   uint32_t bookMs = 0;
   uint32_t durationMs = 0;
   bool finished = false;
+  uint64_t syncedUpdateMs = 0;  ///< a push: the server's lastUpdate at our last sync
 };
 
 struct SyncResult {
@@ -356,19 +368,33 @@ struct SyncResult {
 
 SemaphoreHandle_t syncLock = nullptr;
 TaskHandle_t syncTask = nullptr;
-SyncRequest syncRequest;  // one outstanding request; a newer one replaces it
-bool syncRequestPending = false;
-SyncResult syncResult;
+// One pending push and one pending fetch (a newer one replaces its kind): a fetch queued behind
+// the closing push of the previous book must not be lost, nor a push behind a fetch. Pushes go
+// first. Results queue up for the main loop, so none overwrites another before it is seen.
+SyncRequest pendingPush;
+SyncRequest pendingFetch;
+bool pushPending = false;
+bool fetchPending = false;
+std::deque<SyncResult> syncResults;
 
 void syncTaskMain(void*) {
+  // The lastUpdate our own last push left (sync task only), so a push queued behind it is not
+  // mistaken for another device's change.
+  std::string ownPushItemId;
+  uint64_t ownPushUpdateMs = 0;
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     for (;;) {
       SyncRequest request;
       xSemaphoreTake(syncLock, portMAX_DELAY);
-      const bool any = syncRequestPending;
-      request = syncRequest;
-      syncRequestPending = false;
+      const bool any = pushPending || fetchPending;
+      if (pushPending) {
+        request = std::move(pendingPush);
+        pushPending = false;
+      } else if (fetchPending) {
+        request = std::move(pendingFetch);
+        fetchPending = false;
+      }
       xSemaphoreGive(syncLock);
       if (!any) break;
 
@@ -377,15 +403,37 @@ void syncTaskMain(void*) {
       result.push = request.push;
       result.itemId = request.itemId;
       result.pushedBookMs = request.bookMs;
+      if (request.onlyIfConnected && !AbsWifi::connected()) continue;
       AbsWifi::Use wifi(result.error);
       if (wifi.ok()) {
-        result.ok = !request.push || Abs::updateProgress(request.itemId, request.bookMs, request.durationMs,
-                                                         request.finished, result.error);
-        // After a push, read it back: its lastUpdate is what "in sync" means from now on.
-        if (result.ok) result.ok = Abs::progress(request.itemId, result.progress, result.error);
+        const Abs::KeepConnection keep;  // the check, the save and the read-back on one connection
+        result.ok = Abs::progress(request.itemId, result.progress, result.error);
+        // A push never overwrites a position another device moved on to since our last sync (or
+        // our own last push): it may have been queued before the main loop saw that position.
+        // Reported as a fetch instead, so applySyncResult() adopts it.
+        const Abs::Progress& server = result.progress;
+        const bool movedElsewhere = server.exists && server.lastUpdateMs != request.syncedUpdateMs &&
+                                    !(request.itemId == ownPushItemId && server.lastUpdateMs == ownPushUpdateMs) &&
+                                    server.currentMs > request.bookMs + SYNC_TOLERANCE_MS;
+        if (result.ok && request.push && movedElsewhere) {
+          result.push = false;
+          AudioModule::logf("Sync: not pushing %lu s, the server is at %lu s",
+                            static_cast<unsigned long>(request.bookMs / 1000),
+                            static_cast<unsigned long>(server.currentMs / 1000));
+        } else if (result.ok && request.push) {
+          result.ok =
+              Abs::updateProgress(request.itemId, request.bookMs, request.durationMs, request.finished, result.error);
+          // Read it back: its lastUpdate is what "in sync" means from now on.
+          if (result.ok) result.ok = Abs::progress(request.itemId, result.progress, result.error);
+          if (result.ok) {
+            ownPushItemId = request.itemId;
+            ownPushUpdateMs = result.progress.lastUpdateMs;
+          }
+        }
       }
       xSemaphoreTake(syncLock, portMAX_DELAY);
-      syncResult = result;
+      syncResults.push_back(std::move(result));
+      while (syncResults.size() > 4) syncResults.pop_front();
       xSemaphoreGive(syncLock);
     }
   }
@@ -394,9 +442,13 @@ void syncTaskMain(void*) {
 void postSync(const SyncRequest& request) {
   if (!syncTask) return;
   xSemaphoreTake(syncLock, portMAX_DELAY);
-  // A fetch must not replace a pending push.
-  if (!(syncRequestPending && syncRequest.push && !request.push)) syncRequest = request;
-  syncRequestPending = true;
+  if (request.push) {
+    pendingPush = request;
+    pushPending = true;
+  } else {
+    pendingFetch = request;
+    fetchPending = true;
+  }
   xSemaphoreGive(syncLock);
   xTaskNotifyGive(syncTask);
 }
@@ -404,8 +456,10 @@ void postSync(const SyncRequest& request) {
 SyncResult takeSyncResult() {
   SyncResult result;
   xSemaphoreTake(syncLock, portMAX_DELAY);
-  result = syncResult;
-  syncResult.valid = false;
+  if (!syncResults.empty()) {
+    result = std::move(syncResults.front());
+    syncResults.pop_front();
+  }
   xSemaphoreGive(syncLock);
   return result;
 }
@@ -742,16 +796,26 @@ void saveProgress() {
   lastSaveMs = millis();
 }
 
-void requestPush() {
+void requestPush(const bool onlyIfConnected = false) {
   if (!isAbsBook() || !Abs::signedIn()) return;
   SyncRequest request;
   request.push = true;
+  request.onlyIfConnected = onlyIfConnected;
   request.itemId = book.absItemId;
   request.bookMs = finished ? bookDurationMs() : bookMs();
   request.durationMs = bookDurationMs();
   request.finished = finished;
+  request.syncedUpdateMs = syncedUpdateMs;
   postSync(request);
   lastPushMs = millis();
+}
+
+/** Reads the server's position (adopted by applySyncResult() if it moved on elsewhere). */
+void requestFetch() {
+  if (!isAbsBook() || !Abs::signedIn()) return;
+  SyncRequest fetch;
+  fetch.itemId = book.absItemId;
+  postSync(fetch);
 }
 
 void sendControl(const Type type, const void* payload = nullptr, const size_t length = 0) {
@@ -950,6 +1014,13 @@ void updateFromModule() {
 void applySyncResult() {
   const SyncResult result = takeSyncResult();
   if (!result.valid || !isOpen || result.itemId != book.absItemId) return;
+  if (!result.push) {
+    AudioModule::logf(
+        "Sync: %s, server %s at %lu s, here %lu s%s", result.ok ? "fetched" : "fetch failed",
+        result.progress.exists ? (result.progress.lastUpdateMs != syncedUpdateMs ? "changed" : "same") : "none",
+        static_cast<unsigned long>(result.progress.currentMs / 1000), static_cast<unsigned long>(bookMs() / 1000),
+        syncDirty ? " (listened)" : "");
+  }
   if (!result.ok) {
     AudioModule::logf("Sync: %s", result.error.c_str());
     return;
@@ -1009,15 +1080,12 @@ bool startBook() {
   syncDirty = saved.dirty;
   syncedUpdateMs = saved.syncedUpdateMs;
   lastPushedBookMs = syncDirty ? 0 : bookMs();
+  lastPushMs = millis();  // the first periodic push comes an interval after the opening fetch
   lastModuleTryMs = 0;
   wakeModule();
   session = AudioLink::sessionCounter();
   if (AudioLink::ready()) startStream(saved.ms);
-  if (isAbsBook() && Abs::signedIn()) {
-    SyncRequest fetch;
-    fetch.itemId = book.absItemId;
-    postSync(fetch);
-  }
+  requestFetch();
   AudioModule::logf("Player: %s%s, track %d/%d at %lu s", book.title.c_str(), remote ? " (streaming)" : "", track + 1,
                     static_cast<int>(tracks.size()), static_cast<unsigned long>(saved.ms / 1000));
   return true;
@@ -1180,6 +1248,8 @@ void togglePause() {
     return;
   }
   paused = !paused;
+  // Back after a while: the book may have been listened to on another device meanwhile.
+  if (!paused && millis() - pausedAtMs >= RESUME_FETCH_AFTER_MS) requestFetch();
   if (!paused && wifiParked) {
     // The stream was stopped to let Wi-Fi go: start it again where it was.
     startStream(positionMs);
@@ -1343,7 +1413,14 @@ void service() {
   refill();
   applySyncResult();
   if (!paused && streamActive && millis() - lastSaveMs >= SAVE_INTERVAL_MS) saveProgress();
-  if (remote && !paused && streamActive && millis() - lastPushMs >= REMOTE_PUSH_INTERVAL_MS) requestPush();
+  if (isAbsBook() && !paused && streamActive &&
+      millis() - lastPushMs >= (remote ? REMOTE_PUSH_INTERVAL_MS : LOCAL_PUSH_INTERVAL_MS)) {
+    if (remote) {
+      requestPush();
+    } else if (AbsWifi::connected()) {
+      requestPush(true);
+    }
+  }
 }
 
 void shutdown() {

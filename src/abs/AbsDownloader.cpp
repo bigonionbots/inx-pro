@@ -91,8 +91,8 @@ class TrackStream {
       config.url = url.c_str();
       config.timeout_ms = HTTP_TIMEOUT_MS;
       config.crt_bundle_attach = esp_crt_bundle_attach;
-      config.buffer_size = 8192;
-      config.buffer_size_tx = 2048;
+      config.buffer_size = Abs::HTTP_RX_BUFFER;
+      config.buffer_size_tx = Abs::HTTP_TX_BUFFER;
       client_ = esp_http_client_init(&config);
       if (!client_) {
         error = "HTTP client init failed";

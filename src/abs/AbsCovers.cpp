@@ -155,8 +155,8 @@ void coverTask(void*) {
     config.timeout_ms = HTTP_TIMEOUT_MS;
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.event_handler = collect;
-    config.buffer_size = 4096;
-    config.buffer_size_tx = 2048;
+    config.buffer_size = Abs::HTTP_RX_BUFFER;
+    config.buffer_size_tx = Abs::HTTP_TX_BUFFER;
     config.keep_alive_enable = true;
     esp_http_client_handle_t client = AbsWifi::connected() ? esp_http_client_init(&config) : nullptr;
     if (client) esp_http_client_set_header(client, "User-Agent", "inx-pro/" INX_VERSION);

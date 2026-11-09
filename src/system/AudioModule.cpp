@@ -340,14 +340,14 @@ const char* powerResultText(const PowerResult result) {
 }
 
 void logf(const char* format, ...) {
-  char text[160];
+  char text[320];
   va_list args;
   va_start(args, format);
   vsnprintf(text, sizeof(text), format, args);
   va_end(args);
 
   const uint32_t seconds = millis() / 1000;
-  char line[176];
+  char line[336];
   snprintf(line, sizeof(line), "%02lu:%02lu %s", static_cast<unsigned long>(seconds / 60 % 100),
            static_cast<unsigned long>(seconds % 60), text);
   INX_SERIAL.printf("[AUDIO] %s\n", line);
