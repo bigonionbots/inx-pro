@@ -8,6 +8,7 @@
 #include <GfxRenderer.h>
 
 #include "system/MappedInputManager.h"
+#include "system/ScreenComponents.h"
 #include "util/LibraryIndexRefresh.h"
 
 extern void onGoToHome();
@@ -55,7 +56,6 @@ bool Page::menuInput() {
 #endif
 
   if (mappedInput.hasTouch()) {
-
     float tapX = 0.0f;
     float tapY = 0.0f;
     if (!mappedInput.wasTouchTapInScreen(renderer, tapX, tapY)) return false;
@@ -79,7 +79,9 @@ bool Page::menuInput() {
 }
 
 void Page::renderPage() {
+  if (ScreenComponents::wifiIconStale()) updateRequired = true;  // Wi-Fi connected or dropped
   if (!updateRequired) return;
+  ScreenComponents::forgetWifiShown();  // set again if this page draws the icon
   render();
   updateRequired = false;
 }
@@ -126,7 +128,9 @@ void Page::menu() { navigation::Menu::render(); }
 
 void Page::refresh() { LibraryIndexRefresh::start(renderer, this); }
 
-void Page::search() { openSearchFromCallback([] { onGoToHome(); }); }
+void Page::search() {
+  openSearchFromCallback([] { onGoToHome(); });
+}
 
 bool Page::back() {
   onGoToHome();

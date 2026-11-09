@@ -4,7 +4,6 @@
  */
 
 #include "Menu.h"
-#include "activity/page/Page.h"
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
@@ -13,12 +12,14 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "activity/page/Page.h"
 #include "images/Library.h"
 #include "images/Recent.h"
 #include "images/Search.h"
 #include "images/Setting.h"
 #include "images/Stats.h"
 #include "images/Sync.h"
+#include "images/Wifi.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
 #include "system/ScreenComponents.h"
@@ -38,10 +39,8 @@ struct Item {
 };
 
 const Item items[itemCount] = {
-    {Recent, navigation::Menu::Action::Home},
-    {Library, navigation::Menu::Action::Library},
-    {Setting, navigation::Menu::Action::Settings},
-    {Sync, navigation::Menu::Action::Sync},
+    {Recent, navigation::Menu::Action::Home},      {Library, navigation::Menu::Action::Library},
+    {Setting, navigation::Menu::Action::Settings}, {Sync, navigation::Menu::Action::Sync},
     {Stats, navigation::Menu::Action::Stats},
 };
 
@@ -75,13 +74,9 @@ int heightFor(const GfxRenderer& renderer) {
   return popupSize;
 }
 
-int x(const GfxRenderer& renderer) {
-  return (renderer.getScreenWidth() - width()) / 2;
-}
+int x(const GfxRenderer& renderer) { return (renderer.getScreenWidth() - width()) / 2; }
 
-int y(const GfxRenderer& renderer) {
-  return (renderer.getScreenHeight() - heightFor(renderer)) / 2;
-}
+int y(const GfxRenderer& renderer) { return (renderer.getScreenHeight() - heightFor(renderer)) / 2; }
 
 int cellX(const GfxRenderer& renderer, const int column) {
   return x(renderer) + popupPadding + column * (cellSize + itemGap);
@@ -125,16 +120,18 @@ bool current(const navigation::Menu& menu, const navigation::Menu::Action action
   }
 }
 
-}
+}  // namespace
 
 namespace navigation {
 
 Menu::Menu(GfxRenderer& renderer)
     : menuRenderer(renderer)
 #if INX_HAS_FRONTLIGHT
-      , lightDrawer(renderer)
+      ,
+      lightDrawer(renderer)
 #endif
-{}
+{
+}
 
 MappedInputManager::Button Menu::tabPrevButton() const { return MappedInputManager::Button::Left; }
 
@@ -148,11 +145,16 @@ void Menu::drawBattery(const GfxRenderer& renderer) const {
   constexpr int batteryRightMargin = 10;
   const bool showPercentage = SETTINGS.hideBatteryPercentage != SystemSetting::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
   const int textWidth = showPercentage ? renderer.text.getWidth(MONTSERRAT_8_FONT_ID, "100%") : 0;
-  const int width = showPercentage ? ScreenComponents::BATTERY_ICON_WIDTH + ScreenComponents::BATTERY_TEXT_GAP + textWidth
-                                   : ScreenComponents::BATTERY_ICON_WIDTH;
+  const int width = showPercentage
+                        ? ScreenComponents::BATTERY_ICON_WIDTH + ScreenComponents::BATTERY_TEXT_GAP + textWidth
+                        : ScreenComponents::BATTERY_ICON_WIDTH;
   const int x = renderer.getScreenWidth() - batteryRightMargin - width;
   const int y = topPadding + (iconSize - 18) / 2;
   ScreenComponents::drawBattery(renderer, x, y, showPercentage);
+  // Wi-Fi to the left of the battery, and of the charging bolt (drawn 30 px left of it) when charging.
+  constexpr int wifiGap = 10;
+  const int wifiRight = x - wifiGap - ScreenComponents::chargingIconReach();
+  ScreenComponents::drawWifi(renderer, wifiRight - WIFI_ICON_WIDTH, topPadding + (iconSize - WIFI_ICON_HEIGHT) / 2);
 }
 
 void Menu::handleTabNavigation(const bool leftPressed, const bool rightPressed) {
@@ -273,8 +275,8 @@ void Menu::popup() const {
     }
     const int iconX = itemX + (cellSize - itemSize) / 2;
     const int iconY = itemY + (cellSize - itemSize) / 2;
-    menuRenderer.bitmap.icon(items[index].icon, iconX, iconY, itemSize, itemSize,
-                             BitmapRender::Orientation::None, active);
+    menuRenderer.bitmap.icon(items[index].icon, iconX, iconY, itemSize, itemSize, BitmapRender::Orientation::None,
+                             active);
   }
   menuRenderer.rectangle.render(left, top, popupW, popupH, true);
 }
@@ -295,10 +297,9 @@ Menu::Action Menu::handleInput(MappedInputManager& input) const {
   if (lightAction == LightDrawer::Action::Closed) return Action::Closed;
   if (lightAction == LightDrawer::Action::Adjusted) return Action::Opened;
 #endif
-  const bool touchSwipe = input.wasTouchSwipeUpForRenderer(menuRenderer) ||
-                          input.wasTouchSwipeDownForRenderer(menuRenderer) ||
-                          input.wasTouchSwipeLeftForRenderer(menuRenderer) ||
-                          input.wasTouchSwipeRightForRenderer(menuRenderer);
+  const bool touchSwipe =
+      input.wasTouchSwipeUpForRenderer(menuRenderer) || input.wasTouchSwipeDownForRenderer(menuRenderer) ||
+      input.wasTouchSwipeLeftForRenderer(menuRenderer) || input.wasTouchSwipeRightForRenderer(menuRenderer);
   if (touchSwipe) {
     ignoreOpeningTap = false;
     return Action::None;
@@ -408,4 +409,4 @@ Menu::Action Menu::handleTap(const int tapX, const int tapY) const {
   return Action::None;
 }
 
-}
+}  // namespace navigation

@@ -14,7 +14,10 @@
 #include <cstdio>
 #include <string>
 
-#include "state/SystemSetting.h"
+#ifndef SIMULATOR
+#include <WiFi.h>
+#endif
+
 #include "images/Back.h"
 #include "images/Battery.h"
 #include "images/Charging.h"
@@ -23,6 +26,8 @@
 #include "images/Setting.h"
 #include "images/Stats.h"
 #include "images/Sync.h"
+#include "images/Wifi.h"
+#include "state/SystemSetting.h"
 #include "system/Fonts.h"
 
 extern HalGPIO gpio;
@@ -53,7 +58,7 @@ bool formatMenuClock(char* out, const size_t outSize) {
   return true;
 }
 
-}
+}  // namespace
 
 void ScreenComponents::drawBattery(const GfxRenderer& renderer, const int left, const int top,
                                    const bool showPercentage) {
@@ -65,8 +70,7 @@ void ScreenComponents::drawBattery(const GfxRenderer& renderer, const int left, 
   const bool charging = gpio.isCharging();
 #endif
   const auto percentageText = showPercentage ? std::to_string(percentage) + "%" : "";
-  renderer.text.render(MONTSERRAT_8_FONT_ID, left + BATTERY_ICON_WIDTH + BATTERY_TEXT_GAP, top,
-                       percentageText.c_str());
+  renderer.text.render(MONTSERRAT_8_FONT_ID, left + BATTERY_ICON_WIDTH + BATTERY_TEXT_GAP, top, percentageText.c_str());
 
   renderer.bitmap.icon(BatteryIcon, left, top + BATTERY_ICON_TOP_OFFSET, BATTERY_ICON_WIDTH, BATTERY_ICON_HEIGHT);
 
@@ -83,10 +87,40 @@ void ScreenComponents::drawBattery(const GfxRenderer& renderer, const int left, 
     constexpr int chargingIconH = 40;
     constexpr int chargingIconGap = 30;
     renderer.bitmap.icon(Charging, left - chargingIconGap,
-                         top + BATTERY_ICON_TOP_OFFSET + (BATTERY_ICON_HEIGHT - chargingIconH) / 2,
-                         chargingIconW, chargingIconH, BitmapRender::Orientation::None);
+                         top + BATTERY_ICON_TOP_OFFSET + (BATTERY_ICON_HEIGHT - chargingIconH) / 2, chargingIconW,
+                         chargingIconH, BitmapRender::Orientation::None);
   }
 }
+
+namespace {
+int wifiShown = -1;  // what the current frame's icon shows: -1 none, 0 off, 1 connected
+
+bool wifiConnected() {
+#ifdef SIMULATOR
+  return false;
+#else
+  return WiFi.status() == WL_CONNECTED;
+#endif
+}
+}  // namespace
+
+void ScreenComponents::drawWifi(const GfxRenderer& renderer, const int left, const int top) {
+  const bool connected = wifiConnected();
+  renderer.bitmap.icon(connected ? WifiOnIcon : WifiOffIcon, left, top, WIFI_ICON_WIDTH, WIFI_ICON_HEIGHT);
+  wifiShown = connected ? 1 : 0;
+}
+
+int ScreenComponents::chargingIconReach() {
+#ifdef SIMULATOR
+  return 0;
+#else
+  return gpio.isCharging() ? 30 : 0;  // chargingIconGap in drawBattery()
+#endif
+}
+
+void ScreenComponents::forgetWifiShown() { wifiShown = -1; }
+
+bool ScreenComponents::wifiIconStale() { return wifiShown >= 0 && wifiShown != (wifiConnected() ? 1 : 0); }
 
 bool ScreenComponents::drawMenuClock(const GfxRenderer& renderer, const int left, const int top) {
   char clockText[10] = {};
@@ -169,7 +203,7 @@ void paintLoadingProgressBarRow(const GfxRenderer& renderer, const ScreenCompone
   renderer.rectangle.render(L.barX, L.barY, L.barW, L.barH, false);
 }
 
-}
+}  // namespace
 
 ScreenComponents::LoadingProgressLayout ScreenComponents::LoadingProgress::show(const GfxRenderer& renderer,
                                                                                 const char* message,
@@ -249,8 +283,7 @@ int ScreenComponents::drawTabBar(const GfxRenderer& renderer, const int y, const
   for (const auto& tab : tabs) {
     const EpdFontFamily::Style style = tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
     const int baseWidth = std::max(renderer.text.getUntranslatedWidth(systemFontId(), tab.label),
-                                   renderer.text.getUntranslatedWidth(systemFontId(), tab.label,
-                                                                      EpdFontFamily::BOLD));
+                                   renderer.text.getUntranslatedWidth(systemFontId(), tab.label, EpdFontFamily::BOLD));
     const std::string shown = renderer.text.truncate(systemFontId(), tab.label, baseWidth, style);
     const int textWidth = renderer.text.getUntranslatedWidth(systemFontId(), shown.c_str(), style);
 
@@ -299,8 +332,7 @@ void ScreenComponents::drawScrollIndicator(const GfxRenderer& renderer, const in
   const std::string pageText = std::to_string(currentPage) + "/" + std::to_string(totalPages);
   const int textWidth = renderer.text.getWidth(MONTSERRAT_8_FONT_ID, pageText.c_str());
   const int textX = centerX - textWidth / 2;
-  const int textY =
-      (indicatorTop + indicatorBottom) / 2 - renderer.text.getLineHeight(MONTSERRAT_8_FONT_ID) / 2;
+  const int textY = (indicatorTop + indicatorBottom) / 2 - renderer.text.getLineHeight(MONTSERRAT_8_FONT_ID) / 2;
 
   renderer.text.render(MONTSERRAT_8_FONT_ID, textX, textY, pageText.c_str());
 }
@@ -339,10 +371,9 @@ bool gBackVisible = false;
 int gBackX = 0;
 int gBackY = 0;
 int gBackSize = 0;
-}
+}  // namespace
 
-void ScreenComponents::drawPageHeaderBackButton(const GfxRenderer& renderer, const int startY,
-                                                const int headerHeight) {
+void ScreenComponents::drawPageHeaderBackButton(const GfxRenderer& renderer, const int startY, const int headerHeight) {
   const int backX = renderer.getScreenWidth() - kPageHeaderBackRightMargin - kPageHeaderBackIconSize;
   const int backY = startY + (headerHeight - kPageHeaderBackIconSize) / 2;
   renderer.bitmap.icon(Back, backX, backY, kPageHeaderBackIconSize, kPageHeaderBackIconSize,

@@ -20,6 +20,7 @@
 #include "system/AudioLink.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
+#include "system/ScreenComponents.h"
 #include "system/UiLayout.h"
 #include "util/SdIoMutex.h"
 
@@ -186,6 +187,7 @@ void AudioPlayerActivity::loop() {
   const bool stateChanged = key != renderedState && now - lastRenderMs >= MIN_REDRAW_MS;
   const bool positionStale =
       view == View::NowPlaying && v.positionMs / 1000 != renderedSecond && now - lastRenderMs >= POSITION_REDRAW_MS;
+  if (ScreenComponents::wifiIconStale() && now - lastRenderMs >= MIN_REDRAW_MS) updateRequired = true;
   if (updateRequired || stateChanged || positionStale) {
     updateRequired = false;
     render();
@@ -334,6 +336,7 @@ void AudioPlayerActivity::button(const int x, const int y, const int w, const in
 }
 
 void AudioPlayerActivity::render() {
+  ScreenComponents::forgetWifiShown();
   targets.clear();
   renderer.clearScreen();
   const char* title = view == View::Books      ? "Audiobooks"

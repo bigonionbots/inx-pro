@@ -8,8 +8,10 @@
 #include <GfxRenderer.h>
 
 #include "images/Close.h"
+#include "images/Wifi.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
+#include "system/ScreenComponents.h"
 
 int SubPage::header(const GfxRenderer& renderer, const char* name) {
   constexpr int top = FREEINK_DEVICE_X4PRO ? 20 : 15;
@@ -18,11 +20,14 @@ int SubPage::header(const GfxRenderer& renderer, const char* name) {
   const int textY = top + (size - renderer.text.getLineHeight(font)) / 2;
   renderer.text.render(font, 20, textY, name ? name : "", true, EpdFontFamily::BOLD);
   renderer.bitmap.icon(Close, renderer.getScreenWidth() - 60, top, size, size);
+  constexpr int wifiGap = 16;
+  ScreenComponents::drawWifi(renderer, renderer.getScreenWidth() - 60 - wifiGap - WIFI_ICON_WIDTH,
+                             top + (size - WIFI_ICON_HEIGHT) / 2);
   return top + size + 20;
 }
 
-bool SubPage::closeInput(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                         const std::function<void()>& close, const bool closeOnSwipeUp) {
+bool SubPage::closeInput(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::function<void()>& close,
+                         const bool closeOnSwipeUp) {
   if (closeOnSwipeUp && mappedInput.hasTouch() && mappedInput.wasTouchSwipeUp()) {
     if (close) close();
     return true;
@@ -57,8 +62,7 @@ bool SubPage::closeInput(GfxRenderer& renderer, MappedInputManager& mappedInput,
   return false;
 }
 
-SubPage::SubPage(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
-                 std::function<void()> close)
+SubPage::SubPage(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput, std::function<void()> close)
     : Page(name, renderer, mappedInput), close(std::move(close)) {}
 
 void SubPage::menu() {

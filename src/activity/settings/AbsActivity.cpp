@@ -29,6 +29,7 @@
 #include "system/AudioPlayer.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
+#include "system/ScreenComponents.h"
 #include "system/UiLayout.h"
 
 namespace {
@@ -595,6 +596,7 @@ void AbsActivity::loop() {
   const bool downloadTick =
       view == View::Download && ((AbsDownloader::status().active && millis() - lastRenderMs >= DOWNLOAD_REDRAW_MS) ||
                                  AbsQueue::changeCounter() != renderedQueue);
+  if (ScreenComponents::wifiIconStale()) updateRequired = true;  // the header's Wi-Fi icon
   if (updateRequired || downloadTick || coverTick) {
     updateRequired = false;
     render();
@@ -860,6 +862,7 @@ void AbsActivity::row(const int y, const int height, const Action action, const 
 }
 
 void AbsActivity::render() {
+  ScreenComponents::forgetWifiShown();
   targets.clear();
   missingCovers.clear();
   renderedCovers = AbsCovers::changeCounter();
