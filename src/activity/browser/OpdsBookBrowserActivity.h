@@ -46,6 +46,8 @@ class OpdsBookBrowserActivity final : public ActivityWithSubactivity {
   TaskHandle_t displayTaskHandle = nullptr;
   SemaphoreHandle_t renderingMutex = nullptr;
   bool updateRequired = false;
+  int downloadedBooks = 0;        ///< since the last library update
+  bool leaveAfterUpdate = false;  ///< leaving: waiting for the library update to finish
 
   BrowserState state = BrowserState::LOADING;
   std::vector<OpdsEntry> entries;
@@ -75,6 +77,8 @@ class OpdsBookBrowserActivity final : public ActivityWithSubactivity {
   void launchWifiSelection();
   /** Handles completion of the WiFi selection subactivity. */
   void onWifiSelectionComplete(bool connected);
+  /** Leaves the browser, updating the library first if books were downloaded. */
+  void leave();
   /** Fetches and parses the OPDS feed at the given path. */
   void fetchFeed(const std::string& path);
   /** Navigates into a catalog or book entry. */

@@ -12,14 +12,15 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 
+#include "activity/network/WifiSelectionActivity.h"
 #include "activity/page/SubPage.h"
 #include "activity/page/components/global/Button.h"
-#include "activity/network/WifiSelectionActivity.h"
 #include "images/Download.h"
 #include "network/HttpDownloader.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
 #include "system/ScreenComponents.h"
+#include "util/LibraryIndexRefresh.h"
 #include "util/StringUtils.h"
 #include "util/UrlUtils.h"
 
@@ -68,7 +69,7 @@ void renderDownloadButton(const GfxRenderer& renderer, const ButtonBounds& bound
 bool contains(const ButtonBounds& bounds, const int x, const int y) {
   return x >= bounds.x && x < bounds.x + bounds.width && y >= bounds.y && y < bounds.y + bounds.height;
 }
-}
+}  // namespace
 
 /** Static trampoline that dispatches to the instance's displayTaskLoop. */
 void OpdsBookBrowserActivity::taskTrampoline(void* param) {
@@ -90,8 +91,7 @@ void OpdsBookBrowserActivity::onEnter() {
   statusMessage = "Checking WiFi...";
   updateRequired = true;
 
-  const bool wifiAlreadyConnected =
-      WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
+  const bool wifiAlreadyConnected = WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
   if (!wifiAlreadyConnected) {
     checkAndConnectWifi();
   }
@@ -123,12 +123,19 @@ void OpdsBookBrowserActivity::onExit() {
 
 /** Handles input for browsing the catalog and downloading books. */
 void OpdsBookBrowserActivity::loop() {
+  // Leaving after downloads: the library update ran (the main loop held this screen meanwhile).
+  if (leaveAfterUpdate) {
+    if (LibraryIndexRefresh::isRunning()) return;
+    leaveAfterUpdate = false;
+    onGoToHome();
+    return;
+  }
   if (state == BrowserState::WIFI_SELECTION) {
     ActivityWithSubactivity::loop();
     return;
   }
 
-  if (SubPage::closeInput(renderer, mappedInput, onGoToHome)) return;
+  if (SubPage::closeInput(renderer, mappedInput, [this] { leave(); })) return;
 
   if (state == BrowserState::ERROR) {
     if (mappedInput.hasTouch()) {
@@ -165,7 +172,7 @@ void OpdsBookBrowserActivity::loop() {
 
   if (state == BrowserState::CHECK_WIFI) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      onGoToHome();
+      leave();
     }
     return;
   }
@@ -199,8 +206,8 @@ void OpdsBookBrowserActivity::loop() {
         const int pageStartIndex = selectorIndex / PAGE_ITEMS * PAGE_ITEMS;
         const int visibleIndex = (tapY - kBodyTop) / kListItemHeight;
         const int tappedIndex = pageStartIndex + visibleIndex;
-        if (tapY >= kBodyTop && visibleIndex >= 0 && visibleIndex < PAGE_ITEMS &&
-            tappedIndex >= 0 && tappedIndex < static_cast<int>(entries.size())) {
+        if (tapY >= kBodyTop && visibleIndex >= 0 && visibleIndex < PAGE_ITEMS && tappedIndex >= 0 &&
+            tappedIndex < static_cast<int>(entries.size())) {
           selectorIndex = tappedIndex;
           const auto& entry = entries[static_cast<size_t>(tappedIndex)];
           if (entry.type == OpdsEntryType::BOOK) {
@@ -319,8 +326,7 @@ void OpdsBookBrowserActivity::render() const {
   const auto labels = mappedInput.mapLabels("« Back", confirmLabel, "", "");
 
   if (entries.empty()) {
-    renderer.text.centered(systemFontId(), bodyTop + (pageHeight - bodyTop - 80) / 2,
-                           "No entries found");
+    renderer.text.centered(systemFontId(), bodyTop + (pageHeight - bodyTop - 80) / 2, "No entries found");
     renderer.displayBuffer();
     return;
   }
@@ -346,8 +352,7 @@ void OpdsBookBrowserActivity::render() const {
       }
     }
 
-    auto item =
-        renderer.text.truncate(systemFontId(), displayText.c_str(), renderer.getScreenWidth() - 40);
+    auto item = renderer.text.truncate(systemFontId(), displayText.c_str(), renderer.getScreenWidth() - 40);
     const int textY = itemY + (kListItemHeight - renderer.text.getLineHeight(systemFontId())) / 2;
     renderer.text.render(systemFontId(), 20, textY, item.c_str(), !isSelected);
     renderer.line.render(0, itemY + kListItemHeight - 1, pageWidth, itemY + kListItemHeight - 1, true,
@@ -423,9 +428,22 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
 }
 
 /** Navigates back to the previous catalog entry, or exits if at the root. */
+void OpdsBookBrowserActivity::leave() {
+  if (downloadedBooks == 0 || LibraryIndexRefresh::isRunning()) {
+    onGoToHome();
+    return;
+  }
+  // New books on the card: add them to the library index, and to the Authors/Series/... indexes the
+  // Metadata task built, before going (that used to take a manual refresh and the Metadata task).
+  INX_SERIAL.printf("[%lu] [OPDS] %d book(s) downloaded: updating the library\n", millis(), downloadedBooks);
+  downloadedBooks = 0;
+  leaveAfterUpdate = true;
+  LibraryIndexRefresh::start(renderer, this, true);
+}
+
 void OpdsBookBrowserActivity::navigateBack() {
   if (navigationHistory.empty()) {
-    onGoToHome();
+    leave();
   } else {
     currentPath = navigationHistory.back();
     navigationHistory.pop_back();
@@ -468,9 +486,12 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   if (result == HttpDownloader::OK) {
     INX_SERIAL.printf("[%lu] [OPDS] Download complete: %s\n", millis(), filename.c_str());
 
-    Epub epub(filename, "/.system");
+    // A book downloaded again must not open with the old copy's cached layout (the cache lives
+    // under /.metadata, as for web uploads).
+    Epub epub(filename, "/.metadata");
     epub.clearCache();
     INX_SERIAL.printf("[%lu] [OPDS] Cleared cache for: %s\n", millis(), filename.c_str());
+    ++downloadedBooks;
 
     state = BrowserState::BROWSING;
     updateRequired = true;

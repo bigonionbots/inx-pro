@@ -1,6 +1,7 @@
 #include "LibraryIndexRefresh.h"
 
 #include <Arduino.h>
+#include <GfxRenderer.h>
 #include <HalDisplay.h>
 #include <SDCardManager.h>
 #include <freertos/FreeRTOS.h>
@@ -10,12 +11,11 @@
 #include <cstdlib>
 #include <cstring>
 
-#include <GfxRenderer.h>
-
 #include "../activity/Activity.h"
 #include "../state/SystemSetting.h"
 #include "../system/ScreenComponents.h"
 #include "LibraryIndex.h"
+#include "MetadataIndex.h"
 
 namespace {
 
@@ -27,6 +27,7 @@ size_t frameSize = 0;
 ScreenComponents::LoadingProgressLayout layout{};
 volatile int current = 0;
 volatile int total = 0;
+bool rebuildMetadata = false;  // for the task: this run also rebuilds the metadata indexes
 int displayedProgress = -1;
 constexpr uint32_t stackSize = 16384;
 
@@ -42,10 +43,11 @@ void clearFrame() {
   displayedProgress = -1;
 }
 
-}
+}  // namespace
 
-void LibraryIndexRefresh::start(GfxRenderer& renderer, Activity* currentScreen) {
+void LibraryIndexRefresh::start(GfxRenderer& renderer, Activity* currentScreen, const bool withMetadata) {
   if (running || popup) return;
+  rebuildMetadata = withMetadata;
 
   renderer.syncWriteBufferFromActive();
   frameSize = renderer.getBufferSize();
@@ -69,6 +71,17 @@ void LibraryIndexRefresh::start(GfxRenderer& renderer, Activity* currentScreen) 
         });
         SETTINGS.useLibraryIndex = 1;
         SETTINGS.saveToFile();
+        if (rebuildMetadata) {
+          const MetadataIndex::Options options = MetadataIndex::existingIndexes();
+          if (MetadataIndex::any(options)) {
+            current = 0;
+            total = 0;
+            MetadataIndex::generate(options, [](const int indexed, const int count, const char*, const char*) {
+              current = indexed;
+              total = count;
+            });
+          }
+        }
         running = false;
         vTaskDelete(nullptr);
       },
