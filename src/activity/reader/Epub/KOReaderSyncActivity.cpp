@@ -8,6 +8,7 @@
 #include <GfxRenderer.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include <esp_heap_caps.h>
 #include <esp_sntp.h>
 
 #include <algorithm>
@@ -223,7 +224,7 @@ void KOReaderSyncActivity::performSync() {
   if (result != KOReaderSyncClient::OK) {
     xSemaphoreTake(renderingMutex, portMAX_DELAY);
     state = SYNC_FAILED;
-    statusMessage = KOReaderSyncClient::errorString(result);
+    statusMessage = KOReaderSyncClient::describe(result);
     xSemaphoreGive(renderingMutex);
     updateRequired = true;
     return;
@@ -268,7 +269,7 @@ void KOReaderSyncActivity::performUpload() {
     wifiOff();
     xSemaphoreTake(renderingMutex, portMAX_DELAY);
     state = SYNC_FAILED;
-    statusMessage = KOReaderSyncClient::errorString(result);
+    statusMessage = KOReaderSyncClient::describe(result);
     xSemaphoreGive(renderingMutex);
     updateRequired = true;
     return;
@@ -304,7 +305,9 @@ void KOReaderSyncActivity::startSync() {
     return;
   }
 
-  INX_SERIAL.printf("[%lu] [KOSync] Turning on WiFi...\n", millis());
+  INX_SERIAL.printf("[%lu] [KOSync] Turning on WiFi... (internal RAM %u bytes free, largest block %u)\n",
+                    millis(), static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                    static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
   WiFi.mode(WIFI_STA);
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -483,7 +486,13 @@ void KOReaderSyncActivity::render() {
 
   if (state == SYNC_FAILED) {
     renderer.text.centered(font, contentCenterY - 20, "Sync failed", true, EpdFontFamily::BOLD);
-    renderer.text.centered(font, contentCenterY + 20, statusMessage.c_str());
+    // Details in brackets (the memory figures) on a line of their own, to fit a narrow screen.
+    const size_t details = statusMessage.find(" (");
+    renderer.text.centered(font, contentCenterY + 20, statusMessage.substr(0, details).c_str());
+    if (details != std::string::npos) {
+      renderer.text.centered(font, contentCenterY + 20 + renderer.text.getLineHeight(font),
+                             statusMessage.substr(details + 1).c_str());
+    }
 
     const auto labels = mappedInput.mapLabels("Back", "", "", "");
     renderer.displayBuffer();

@@ -10,10 +10,12 @@
 #include <HardwareSerial.h>
 #include <Utf8.h>
 
+#include <cstdint>
 #include <ctime>
 
 #include "KOReaderCredentialStore.h"
 #ifndef SIMULATOR
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 
 extern "C" {
@@ -22,14 +24,65 @@ extern esp_err_t esp_crt_bundle_attach(void* conf);
 #endif
 
 int KOReaderSyncClient::lastHttpCode = 0;
+size_t KOReaderSyncClient::lowMemoryBlock = 0;
+size_t KOReaderSyncClient::lowMemoryFree = 0;
+
+std::string KOReaderSyncClient::describe(const Error error) {
+  std::string text = errorString(error);
+  if (error == LOW_MEMORY) {
+    char figures[64];
+    snprintf(figures, sizeof(figures), " (largest block %u KB, %u KB free)",
+             static_cast<unsigned>(lowMemoryBlock / 1024), static_cast<unsigned>(lowMemoryFree / 1024));
+    text += figures;
+  }
+  return text;
+}
 
 namespace {
 
 constexpr char DEVICE_NAME[] = "CrossPoint";
 constexpr char DEVICE_ID[] = "crosspoint-reader";
-constexpr int HTTP_BUF_SIZE = 2048;
-constexpr uint32_t MIN_HEAP_FOR_TLS = 55000;
+// Over 4 KB, so malloc() puts them in PSRAM (CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL is 4096): at 2 KB
+// both landed in internal RAM, which TLS itself needs.
+constexpr int HTTP_RX_BUF_SIZE = 8192;
+constexpr int HTTP_TX_BUF_SIZE = 4352;
+/**
+ * The old check wanted 55 KB of internal heap in total, which a device running the USB host and an
+ * audio stream (17-40 KB free, the Audiobookshelf client doing TLS fine) never has. Allocations over
+ * 4 KB go to PSRAM, so all TLS takes from internal RAM is pieces of up to 4 KB: below a 4 KB largest
+ * free block it cannot work; above it, try (and report a real out-of-memory failure).
+ */
+constexpr size_t MIN_INTERNAL_BLOCK_FOR_TLS = 4 * 1024;
 constexpr size_t METADATA_FIELD_MAX_BYTES = 512;
+/** doRequest(): failed for lack of memory (other failures are -1). */
+constexpr int LOW_MEMORY_STATUS = -2;
+
+size_t freeInternal() {
+#ifdef SIMULATOR
+  return SIZE_MAX;
+#else
+  return heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#endif
+}
+
+size_t largestInternalBlock() {
+#ifdef SIMULATOR
+  return SIZE_MAX;
+#else
+  return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#endif
+}
+
+/** False (and logged) when internal RAM is too fragmented for a TLS handshake. */
+bool enoughMemoryForTls() {
+  const size_t block = largestInternalBlock();
+  if (block >= MIN_INTERNAL_BLOCK_FOR_TLS) return true;
+  KOReaderSyncClient::lowMemoryBlock = block;
+  KOReaderSyncClient::lowMemoryFree = freeInternal();
+  INX_SERIAL.printf("[%lu] [KOSync] Insufficient memory for TLS: largest internal block %u bytes\n", millis(),
+                    static_cast<unsigned>(block));
+  return false;
+}
 
 void addMetadataField(JsonObject& metadata, const char* key, std::string value) {
   if (value.empty()) {
@@ -64,8 +117,8 @@ int doRequest(const std::string& url, const std::string& method, const std::stri
   cfg.timeout_ms = 15000;
   cfg.crt_bundle_attach = esp_crt_bundle_attach;
   cfg.keep_alive_enable = false;
-  cfg.buffer_size = HTTP_BUF_SIZE;
-  cfg.buffer_size_tx = HTTP_BUF_SIZE;
+  cfg.buffer_size = HTTP_RX_BUF_SIZE;
+  cfg.buffer_size_tx = HTTP_TX_BUF_SIZE;
   cfg.disable_auto_redirect = false;
   cfg.username = KOREADER_STORE.getUsername().c_str();
   cfg.password = KOREADER_STORE.getPassword().c_str();
@@ -98,8 +151,18 @@ int doRequest(const std::string& url, const std::string& method, const std::stri
   const int status = esp_http_client_get_status_code(client);
   KOReaderSyncClient::lastHttpCode = status;
   if (err != ESP_OK) {
-    INX_SERIAL.printf("[%lu] [KOSync] perform failed: %s status=%d\n", millis(), esp_err_to_name(err), status);
+    INX_SERIAL.printf("[%lu] [KOSync] perform failed: %s status=%d, largest internal block %u\n", millis(),
+                      esp_err_to_name(err), status, static_cast<unsigned>(largestInternalBlock()));
+    // Out of memory during the handshake reads as a connection failure: say so, as a retry may work.
+    // The figures are taken before cleanup frees the client's memory.
+    const size_t block = largestInternalBlock();
+    const size_t free = freeInternal();
     esp_http_client_cleanup(client);
+    if (err == ESP_ERR_NO_MEM || block < MIN_INTERNAL_BLOCK_FOR_TLS) {
+      KOReaderSyncClient::lowMemoryBlock = block;
+      KOReaderSyncClient::lowMemoryFree = free;
+      return LOW_MEMORY_STATUS;
+    }
     return -1;
   }
 
@@ -120,7 +183,7 @@ int doRequest(const std::string& url, const std::string& method, const std::stri
 
 #endif
 
-}
+}  // namespace
 
 KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
   lastHttpCode = 0;
@@ -130,11 +193,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
   }
 
   std::string url = KOREADER_STORE.getBaseUrl() + "/users/auth";
-  const uint32_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_HEAP_FOR_TLS) {
-    INX_SERIAL.printf("[%lu] [KOSync] Insufficient heap for TLS: %u bytes free\n", millis(), (unsigned)freeHeap);
-    return LOW_MEMORY;
-  }
+  if (!enoughMemoryForTls()) return LOW_MEMORY;
 
   const int httpCode = doRequest(url, "GET", nullptr, nullptr);
   INX_SERIAL.printf("[%lu] [KOSync] Auth response: %d\n", millis(), httpCode);
@@ -146,7 +205,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
   } else if (httpCode == 404) {
     return NOT_FOUND;
   } else if (httpCode < 0) {
-    return NETWORK_ERROR;
+    return httpCode == LOW_MEMORY_STATUS ? LOW_MEMORY : NETWORK_ERROR;
   }
   return SERVER_ERROR;
 }
@@ -159,11 +218,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::createUser() {
   }
 
   const std::string url = KOREADER_STORE.getBaseUrl() + "/users/create";
-  const uint32_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_HEAP_FOR_TLS) {
-    INX_SERIAL.printf("[%lu] [KOSync] Insufficient heap for TLS: %u bytes free\n", millis(), (unsigned)freeHeap);
-    return LOW_MEMORY;
-  }
+  if (!enoughMemoryForTls()) return LOW_MEMORY;
 
   JsonDocument doc;
   doc["username"] = KOREADER_STORE.getUsername();
@@ -182,7 +237,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::createUser() {
     return USER_EXISTS;
   }
   if (httpCode < 0) {
-    return NETWORK_ERROR;
+    return httpCode == LOW_MEMORY_STATUS ? LOW_MEMORY : NETWORK_ERROR;
   }
   return SERVER_ERROR;
 }
@@ -196,11 +251,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
   }
 
   std::string url = KOREADER_STORE.getBaseUrl() + "/syncs/progress/" + documentHash;
-  const uint32_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_HEAP_FOR_TLS) {
-    INX_SERIAL.printf("[%lu] [KOSync] Insufficient heap for TLS: %u bytes free\n", millis(), (unsigned)freeHeap);
-    return LOW_MEMORY;
-  }
+  if (!enoughMemoryForTls()) return LOW_MEMORY;
 
   std::string responseBody;
   const int httpCode = doRequest(url, "GET", nullptr, &responseBody);
@@ -222,7 +273,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
     outProgress.timestamp = doc["timestamp"].as<int64_t>();
 
     INX_SERIAL.printf("[%lu] [KOSync] Got progress: %.2f%% at %s\n", millis(), outProgress.percentage * 100,
-                  outProgress.progress.c_str());
+                      outProgress.progress.c_str());
     return OK;
   }
 
@@ -233,7 +284,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
   } else if (httpCode == 404) {
     return NOT_FOUND;
   } else if (httpCode < 0) {
-    return NETWORK_ERROR;
+    return httpCode == LOW_MEMORY_STATUS ? LOW_MEMORY : NETWORK_ERROR;
   }
   return SERVER_ERROR;
 }
@@ -246,11 +297,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   }
 
   std::string url = KOREADER_STORE.getBaseUrl() + "/syncs/progress";
-  const uint32_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_HEAP_FOR_TLS) {
-    INX_SERIAL.printf("[%lu] [KOSync] Insufficient heap for TLS: %u bytes free\n", millis(), (unsigned)freeHeap);
-    return LOW_MEMORY;
-  }
+  if (!enoughMemoryForTls()) return LOW_MEMORY;
 
   JsonDocument doc;
   doc["document"] = progress.document;
@@ -281,7 +328,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   } else if (httpCode == 404) {
     return NOT_FOUND;
   } else if (httpCode < 0) {
-    return NETWORK_ERROR;
+    return httpCode == LOW_MEMORY_STATUS ? LOW_MEMORY : NETWORK_ERROR;
   }
   return SERVER_ERROR;
 }
