@@ -4,21 +4,20 @@
 #include <Epub.h>
 #include <SDCardManager.h>
 #include <Xtc.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <strings.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
-#include <strings.h>
 #include <utility>
-
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 
 #include "Epub/PsramAllocator.h"
 #include "util/LibraryIndex.h"
@@ -104,15 +103,15 @@ std::string normalized(const std::string& value) {
 std::string localName(const std::string& value) {
   const size_t colon = value.find_last_of(':');
   std::string result = colon == std::string::npos ? value : value.substr(colon + 1);
-  std::transform(result.begin(), result.end(), result.begin(), [](const unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
+  std::transform(result.begin(), result.end(), result.begin(),
+                 [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return result;
 }
 
 std::string getAuthorKey(const std::string& value) {
   const size_t comma = value.find(',');
-  const std::string ordered = comma == std::string::npos ? value : value.substr(comma + 1) + " " + value.substr(0, comma);
+  const std::string ordered =
+      comma == std::string::npos ? value : value.substr(comma + 1) + " " + value.substr(0, comma);
   std::vector<std::string> tokens;
   std::string token;
   for (const unsigned char ch : ordered) {
@@ -137,32 +136,62 @@ std::string getAuthorKey(const std::string& value) {
 std::string indexPath(const MetadataIndex::Kind kind) {
   const char* fileName = "";
   switch (kind) {
-    case MetadataIndex::Kind::Authors: fileName = "authors.idx"; break;
-    case MetadataIndex::Kind::Series: fileName = "series.idx"; break;
-    case MetadataIndex::Kind::Tags: fileName = "tags.idx"; break;
-    case MetadataIndex::Kind::Publishers: fileName = "publishers.idx"; break;
-    case MetadataIndex::Kind::Languages: fileName = "languages.idx"; break;
-    case MetadataIndex::Kind::Ratings: fileName = "ratings.idx"; break;
-    case MetadataIndex::Kind::PublicationDates: fileName = "publication_dates.idx"; break;
-    case MetadataIndex::Kind::Identifiers: fileName = "identifiers.idx"; break;
-    case MetadataIndex::Kind::TitleSorts: fileName = "title_sorts.idx"; break;
-    case MetadataIndex::Kind::AuthorSorts: fileName = "author_sorts.idx"; break;
+    case MetadataIndex::Kind::Authors:
+      fileName = "authors.idx";
+      break;
+    case MetadataIndex::Kind::Series:
+      fileName = "series.idx";
+      break;
+    case MetadataIndex::Kind::Tags:
+      fileName = "tags.idx";
+      break;
+    case MetadataIndex::Kind::Publishers:
+      fileName = "publishers.idx";
+      break;
+    case MetadataIndex::Kind::Languages:
+      fileName = "languages.idx";
+      break;
+    case MetadataIndex::Kind::Ratings:
+      fileName = "ratings.idx";
+      break;
+    case MetadataIndex::Kind::PublicationDates:
+      fileName = "publication_dates.idx";
+      break;
+    case MetadataIndex::Kind::Identifiers:
+      fileName = "identifiers.idx";
+      break;
+    case MetadataIndex::Kind::TitleSorts:
+      fileName = "title_sorts.idx";
+      break;
+    case MetadataIndex::Kind::AuthorSorts:
+      fileName = "author_sorts.idx";
+      break;
   }
   return std::string(kDirectory) + "/" + fileName;
 }
 
 const char* kindLabel(const MetadataIndex::Kind kind) {
   switch (kind) {
-    case MetadataIndex::Kind::Authors: return "Author";
-    case MetadataIndex::Kind::Series: return "Series";
-    case MetadataIndex::Kind::Tags: return "Tag";
-    case MetadataIndex::Kind::Publishers: return "Publisher";
-    case MetadataIndex::Kind::Languages: return "Language";
-    case MetadataIndex::Kind::Ratings: return "Rating";
-    case MetadataIndex::Kind::PublicationDates: return "Publication date";
-    case MetadataIndex::Kind::Identifiers: return "Identifier";
-    case MetadataIndex::Kind::TitleSorts: return "Title sort";
-    case MetadataIndex::Kind::AuthorSorts: return "Author sort";
+    case MetadataIndex::Kind::Authors:
+      return "Author";
+    case MetadataIndex::Kind::Series:
+      return "Series";
+    case MetadataIndex::Kind::Tags:
+      return "Tag";
+    case MetadataIndex::Kind::Publishers:
+      return "Publisher";
+    case MetadataIndex::Kind::Languages:
+      return "Language";
+    case MetadataIndex::Kind::Ratings:
+      return "Rating";
+    case MetadataIndex::Kind::PublicationDates:
+      return "Publication date";
+    case MetadataIndex::Kind::Identifiers:
+      return "Identifier";
+    case MetadataIndex::Kind::TitleSorts:
+      return "Title sort";
+    case MetadataIndex::Kind::AuthorSorts:
+      return "Author sort";
   }
   return "Metadata";
 }
@@ -234,9 +263,8 @@ bool recordLess(const Record& left, const Record& right, const MetadataIndex::Ki
   return left.path < right.path;
 }
 
-bool addRecord(Records& records, const std::string& groupKey, const std::string& label,
-               const std::string& path, const std::string& title, const std::string& author,
-               const std::string& order) {
+bool addRecord(Records& records, const std::string& groupKey, const std::string& label, const std::string& path,
+               const std::string& title, const std::string& author, const std::string& order) {
   if (groupKey.empty() || path.empty()) return true;
   if (records.size() >= kMaxBooksPerIndex) return false;
   Record record;
@@ -250,9 +278,9 @@ bool addRecord(Records& records, const std::string& groupKey, const std::string&
   return true;
 }
 
-bool writeGroupedIndex(const MetadataIndex::Kind kind, Records& records,
-                       const std::function<bool()>& shouldCancel) {
-  std::sort(records.begin(), records.end(), [kind](const Record& a, const Record& b) { return recordLess(a, b, kind); });
+bool writeGroupedIndex(const MetadataIndex::Kind kind, Records& records, const std::function<bool()>& shouldCancel) {
+  std::sort(records.begin(), records.end(),
+            [kind](const Record& a, const Record& b) { return recordLess(a, b, kind); });
   Groups groups;
   for (size_t i = 0; i < records.size();) {
     size_t end = i + 1;
@@ -280,8 +308,8 @@ bool writeGroupedIndex(const MetadataIndex::Kind kind, Records& records,
     return false;
   }
 
-  constexpr uint32_t headerSize = sizeof(kIndexMagic) - 1 + sizeof(kIndexVersion) + sizeof(uint8_t) +
-                                 sizeof(uint32_t) * 3;
+  constexpr uint32_t headerSize =
+      sizeof(kIndexMagic) - 1 + sizeof(kIndexVersion) + sizeof(uint8_t) + sizeof(uint32_t) * 3;
   const uint32_t directoryStart = headerSize + hashCapacity * sizeof(HashSlot);
   uint32_t directoryOffset = directoryStart;
   for (GroupInfo& group : groups) {
@@ -300,7 +328,7 @@ bool writeGroupedIndex(const MetadataIndex::Kind kind, Records& records,
     for (size_t i = group.first; i < group.first + group.count; ++i) {
       const Record& record = records[i];
       dataOffset += sizeof(uint16_t) * 4 + static_cast<uint32_t>(record.path.size() + record.title.size() +
-                                                                  record.author.size() + record.order.size());
+                                                                 record.author.size() + record.order.size());
     }
   }
 
@@ -312,13 +340,16 @@ bool writeGroupedIndex(const MetadataIndex::Kind kind, Records& records,
     hashSlots[slot] = HashSlot{hash, group.directoryOffset};
   }
 
-  bool ok = output.write(reinterpret_cast<const uint8_t*>(kIndexMagic), sizeof(kIndexMagic) - 1) == sizeof(kIndexMagic) - 1;
+  bool ok =
+      output.write(reinterpret_cast<const uint8_t*>(kIndexMagic), sizeof(kIndexMagic) - 1) == sizeof(kIndexMagic) - 1;
   ok = ok && output.write(&kIndexVersion, sizeof(kIndexVersion)) == sizeof(kIndexVersion);
   const uint8_t storedKind = static_cast<uint8_t>(kind);
   ok = ok && output.write(&storedKind, sizeof(storedKind)) == sizeof(storedKind);
   ok = ok && output.write(reinterpret_cast<const uint8_t*>(&groupCount), sizeof(groupCount)) == sizeof(groupCount);
-  ok = ok && output.write(reinterpret_cast<const uint8_t*>(&hashCapacity), sizeof(hashCapacity)) == sizeof(hashCapacity);
-  ok = ok && output.write(reinterpret_cast<const uint8_t*>(&directoryStart), sizeof(directoryStart)) == sizeof(directoryStart);
+  ok =
+      ok && output.write(reinterpret_cast<const uint8_t*>(&hashCapacity), sizeof(hashCapacity)) == sizeof(hashCapacity);
+  ok = ok && output.write(reinterpret_cast<const uint8_t*>(&directoryStart), sizeof(directoryStart)) ==
+                 sizeof(directoryStart);
   for (const HashSlot& slot : hashSlots) {
     ok = ok && output.write(reinterpret_cast<const uint8_t*>(&slot.hash), sizeof(slot.hash)) == sizeof(slot.hash);
     ok = ok && output.write(reinterpret_cast<const uint8_t*>(&slot.directoryOffset), sizeof(slot.directoryOffset)) ==
@@ -330,7 +361,8 @@ bool writeGroupedIndex(const MetadataIndex::Kind kind, Records& records,
     ok = ok && writeShortString(output, std::string(group.key.c_str()));
     ok = ok && writeShortString(output, std::string(group.label.c_str()));
     ok = ok && output.write(reinterpret_cast<const uint8_t*>(&group.count), sizeof(group.count)) == sizeof(group.count);
-    ok = ok && output.write(reinterpret_cast<const uint8_t*>(&group.offset), sizeof(group.offset)) == sizeof(group.offset);
+    ok = ok &&
+         output.write(reinterpret_cast<const uint8_t*>(&group.offset), sizeof(group.offset)) == sizeof(group.offset);
     if (!ok) break;
   }
   for (const GroupInfo& group : groups) {
@@ -358,15 +390,24 @@ bool writeGroupedIndex(const MetadataIndex::Kind kind, Records& records,
 
 std::string fieldValue(const BookMetadataCache::BookMetadata& metadata, const MetadataIndex::Kind kind) {
   switch (kind) {
-    case MetadataIndex::Kind::Authors: return metadata.author;
-    case MetadataIndex::Kind::Series: return metadata.series;
-    case MetadataIndex::Kind::Publishers: return metadata.publisher;
-    case MetadataIndex::Kind::Languages: return metadata.language;
-    case MetadataIndex::Kind::Ratings: return metadata.rating;
-    case MetadataIndex::Kind::PublicationDates: return metadata.publicationDate;
-    case MetadataIndex::Kind::TitleSorts: return metadata.titleSort;
-    case MetadataIndex::Kind::AuthorSorts: return metadata.authorSort;
-    default: return {};
+    case MetadataIndex::Kind::Authors:
+      return metadata.author;
+    case MetadataIndex::Kind::Series:
+      return metadata.series;
+    case MetadataIndex::Kind::Publishers:
+      return metadata.publisher;
+    case MetadataIndex::Kind::Languages:
+      return metadata.language;
+    case MetadataIndex::Kind::Ratings:
+      return metadata.rating;
+    case MetadataIndex::Kind::PublicationDates:
+      return metadata.publicationDate;
+    case MetadataIndex::Kind::TitleSorts:
+      return metadata.titleSort;
+    case MetadataIndex::Kind::AuthorSorts:
+      return metadata.authorSort;
+    default:
+      return {};
   }
 }
 
@@ -413,12 +454,14 @@ bool writeFullMetadata(FsFile& output, const std::string& path, const BookMetada
     if (!writeLongString(output, metadata.tags[i])) return false;
   }
   const uint16_t fieldCount = static_cast<uint16_t>(std::min<size_t>(metadata.fields.size(), 128));
-  if (output.write(reinterpret_cast<const uint8_t*>(&fieldCount), sizeof(fieldCount)) != sizeof(fieldCount)) return false;
+  if (output.write(reinterpret_cast<const uint8_t*>(&fieldCount), sizeof(fieldCount)) != sizeof(fieldCount))
+    return false;
   for (uint16_t i = 0; i < fieldCount; ++i) {
     const auto& field = metadata.fields[i];
     if (!writeLongString(output, field.name) || !writeLongString(output, field.value)) return false;
     const uint8_t attributeCount = static_cast<uint8_t>(std::min<size_t>(field.attributes.size(), 16));
-    if (output.write(reinterpret_cast<const uint8_t*>(&attributeCount), sizeof(attributeCount)) != sizeof(attributeCount)) {
+    if (output.write(reinterpret_cast<const uint8_t*>(&attributeCount), sizeof(attributeCount)) !=
+        sizeof(attributeCount)) {
       return false;
     }
     for (uint8_t j = 0; j < attributeCount; ++j) {
@@ -504,7 +547,8 @@ bool generateGrouped(const MetadataIndex::Kind kind, const bool includeXtc,
                      const std::function<void(int, int, const char*)>& progress,
                      const std::function<bool()>& shouldCancel) {
   Records records;
-  const bool completed = scanLibrary(includeXtc, progress, shouldCancel,
+  const bool completed = scanLibrary(
+      includeXtc, progress, shouldCancel,
       [&records, kind](const std::string& path, const std::string& title, const std::string& author,
                        const BookMetadataCache::BookMetadata& metadata, const bool isXtc) {
         if (kind == MetadataIndex::Kind::Tags) {
@@ -514,13 +558,12 @@ bool generateGrouped(const MetadataIndex::Kind kind, const bool includeXtc,
         } else if (kind == MetadataIndex::Kind::Identifiers) {
           for (const auto& field : metadata.fields) {
             if (localName(field.name) == "identifier" && !field.value.empty()) {
-              if (!addRecord(records, groupKeyFor(field.value, kind), field.value, path, title, author, "")) return false;
+              if (!addRecord(records, groupKeyFor(field.value, kind), field.value, path, title, author, ""))
+                return false;
             }
           }
         } else {
-          std::string value = kind == MetadataIndex::Kind::Authors && isXtc
-                                  ? author
-                                  : fieldValue(metadata, kind);
+          std::string value = kind == MetadataIndex::Kind::Authors && isXtc ? author : fieldValue(metadata, kind);
           if (kind == MetadataIndex::Kind::Series && value.empty()) {
             value = rawCalibreSeriesValue(metadata, false);
           }
@@ -552,12 +595,12 @@ bool generateAllMetadata(const std::function<void(int, int, const char*)>& progr
   const uint32_t countOffset = output.position();
   ok = ok && output.write(reinterpret_cast<const uint8_t*>(&count), sizeof(count)) == sizeof(count);
   const bool completed = scanLibrary(false, progress, shouldCancel,
-      [&output, &count](const std::string& path, const std::string&, const std::string&,
-                        const BookMetadataCache::BookMetadata& metadata, const bool) {
-        if (!writeFullMetadata(output, path, metadata)) return false;
-        ++count;
-        return true;
-      });
+                                     [&output, &count](const std::string& path, const std::string&, const std::string&,
+                                                       const BookMetadataCache::BookMetadata& metadata, const bool) {
+                                       if (!writeFullMetadata(output, path, metadata)) return false;
+                                       ++count;
+                                       return true;
+                                     });
   if (ok && completed) {
     output.seek(countOffset);
     ok = output.write(reinterpret_cast<const uint8_t*>(&count), sizeof(count)) == sizeof(count);
@@ -581,24 +624,33 @@ bool generateSelected(const MetadataIndex::Options& options,
                       const std::function<void(int, int, const char*, const char*)>& progress,
                       const std::function<bool()>& shouldCancel) {
   constexpr std::array<MetadataIndex::Kind, 10> kinds = {
-      MetadataIndex::Kind::Authors,          MetadataIndex::Kind::Series,
-      MetadataIndex::Kind::Tags,             MetadataIndex::Kind::Publishers,
-      MetadataIndex::Kind::Languages,        MetadataIndex::Kind::Ratings,
-      MetadataIndex::Kind::PublicationDates, MetadataIndex::Kind::Identifiers,
-      MetadataIndex::Kind::TitleSorts,       MetadataIndex::Kind::AuthorSorts};
+      MetadataIndex::Kind::Authors,          MetadataIndex::Kind::Series,      MetadataIndex::Kind::Tags,
+      MetadataIndex::Kind::Publishers,       MetadataIndex::Kind::Languages,   MetadataIndex::Kind::Ratings,
+      MetadataIndex::Kind::PublicationDates, MetadataIndex::Kind::Identifiers, MetadataIndex::Kind::TitleSorts,
+      MetadataIndex::Kind::AuthorSorts};
 
   const auto selected = [&options](const MetadataIndex::Kind kind) {
     switch (kind) {
-      case MetadataIndex::Kind::Authors: return options.authors;
-      case MetadataIndex::Kind::Series: return options.series;
-      case MetadataIndex::Kind::Tags: return options.tags;
-      case MetadataIndex::Kind::Publishers: return options.publishers;
-      case MetadataIndex::Kind::Languages: return options.languages;
-      case MetadataIndex::Kind::Ratings: return options.ratings;
-      case MetadataIndex::Kind::PublicationDates: return options.publicationDates;
-      case MetadataIndex::Kind::Identifiers: return options.identifiers;
-      case MetadataIndex::Kind::TitleSorts: return options.titleSorts;
-      case MetadataIndex::Kind::AuthorSorts: return options.authorSorts;
+      case MetadataIndex::Kind::Authors:
+        return options.authors;
+      case MetadataIndex::Kind::Series:
+        return options.series;
+      case MetadataIndex::Kind::Tags:
+        return options.tags;
+      case MetadataIndex::Kind::Publishers:
+        return options.publishers;
+      case MetadataIndex::Kind::Languages:
+        return options.languages;
+      case MetadataIndex::Kind::Ratings:
+        return options.ratings;
+      case MetadataIndex::Kind::PublicationDates:
+        return options.publicationDates;
+      case MetadataIndex::Kind::Identifiers:
+        return options.identifiers;
+      case MetadataIndex::Kind::TitleSorts:
+        return options.titleSorts;
+      case MetadataIndex::Kind::AuthorSorts:
+        return options.authorSorts;
     }
     return false;
   };
@@ -615,12 +667,12 @@ bool generateSelected(const MetadataIndex::Options& options,
     if (!SdMan.openFileForWrite("MDX", allMetadataTempPath, allMetadataFile)) return false;
     constexpr char magic[] = "BMDA";
     const uint8_t version = 1;
-    bool headerOk = allMetadataFile.write(reinterpret_cast<const uint8_t*>(magic), sizeof(magic) - 1) == sizeof(magic) - 1 &&
-                    allMetadataFile.write(&version, sizeof(version)) == sizeof(version);
+    bool headerOk =
+        allMetadataFile.write(reinterpret_cast<const uint8_t*>(magic), sizeof(magic) - 1) == sizeof(magic) - 1 &&
+        allMetadataFile.write(&version, sizeof(version)) == sizeof(version);
     allMetadataCountOffset = allMetadataFile.position();
-    headerOk = headerOk &&
-               allMetadataFile.write(reinterpret_cast<const uint8_t*>(&allMetadataCount), sizeof(allMetadataCount)) ==
-                   sizeof(allMetadataCount);
+    headerOk = headerOk && allMetadataFile.write(reinterpret_cast<const uint8_t*>(&allMetadataCount),
+                                                 sizeof(allMetadataCount)) == sizeof(allMetadataCount);
     if (!headerOk) {
       allMetadataFile.close();
       SdMan.remove(allMetadataTempPath.c_str());
@@ -709,9 +761,30 @@ bool generateSelected(const MetadataIndex::Options& options,
   }
   return true;
 }
-}
+}  // namespace
 
 bool MetadataIndex::hasIndex(const Kind kind) { return SdMan.exists(indexPath(kind).c_str()); }
+
+MetadataIndex::Options MetadataIndex::existingIndexes() {
+  Options options;
+  options.authors = hasIndex(Kind::Authors);
+  options.series = hasIndex(Kind::Series);
+  options.tags = hasIndex(Kind::Tags);
+  options.publishers = hasIndex(Kind::Publishers);
+  options.languages = hasIndex(Kind::Languages);
+  options.ratings = hasIndex(Kind::Ratings);
+  options.publicationDates = hasIndex(Kind::PublicationDates);
+  options.identifiers = hasIndex(Kind::Identifiers);
+  options.titleSorts = hasIndex(Kind::TitleSorts);
+  options.authorSorts = hasIndex(Kind::AuthorSorts);
+  options.completeRecords = SdMan.exists((std::string(kDirectory) + "/all_metadata.idx").c_str());
+  return options;
+}
+
+bool MetadataIndex::any(const Options& o) {
+  return o.authors || o.series || o.tags || o.publishers || o.languages || o.ratings || o.publicationDates ||
+         o.identifiers || o.titleSorts || o.authorSorts || o.completeRecords;
+}
 
 std::string MetadataIndex::authorKey(const std::string& author) { return getAuthorKey(author); }
 
@@ -726,7 +799,8 @@ bool MetadataIndex::loadGroups(const Kind kind, std::vector<Group>& groups) {
   bool ok = file.read(magic, sizeof(magic)) == sizeof(magic) && std::memcmp(magic, kIndexMagic, sizeof(magic)) == 0 &&
             file.read(&version, sizeof(version)) == sizeof(version) &&
             (version == kIndexVersion || version == kLegacyIndexVersion) &&
-            file.read(&storedKind, sizeof(storedKind)) == sizeof(storedKind) && storedKind == static_cast<uint8_t>(kind) &&
+            file.read(&storedKind, sizeof(storedKind)) == sizeof(storedKind) &&
+            storedKind == static_cast<uint8_t>(kind) &&
             file.read(reinterpret_cast<uint8_t*>(&count), sizeof(count)) == sizeof(count) && count <= kMaxGroups;
   if (ok && version == kIndexVersion) {
     uint32_t hashCapacity = 0;
@@ -769,7 +843,8 @@ bool MetadataIndex::findGroup(const Kind kind, const std::string& key, Group& gr
   bool ok = file.read(magic, sizeof(magic)) == sizeof(magic) && std::memcmp(magic, kIndexMagic, sizeof(magic)) == 0 &&
             file.read(&version, sizeof(version)) == sizeof(version) &&
             (version == kIndexVersion || version == kLegacyIndexVersion) &&
-            file.read(&storedKind, sizeof(storedKind)) == sizeof(storedKind) && storedKind == static_cast<uint8_t>(kind) &&
+            file.read(&storedKind, sizeof(storedKind)) == sizeof(storedKind) &&
+            storedKind == static_cast<uint8_t>(kind) &&
             file.read(reinterpret_cast<uint8_t*>(&count), sizeof(count)) == sizeof(count) && count <= kMaxGroups;
   if (!ok) {
     file.close();
@@ -800,8 +875,8 @@ bool MetadataIndex::findGroup(const Kind kind, const std::string& key, Group& gr
     return false;
   }
 
-  constexpr uint32_t headerSize = sizeof(kIndexMagic) - 1 + sizeof(kIndexVersion) + sizeof(uint8_t) +
-                                 sizeof(uint32_t) * 3;
+  constexpr uint32_t headerSize =
+      sizeof(kIndexMagic) - 1 + sizeof(kIndexVersion) + sizeof(uint8_t) + sizeof(uint32_t) * 3;
   const uint32_t wantedHash = groupHash(key);
   uint32_t slotIndex = wantedHash & (hashCapacity - 1);
   for (uint32_t probe = 0; probe < hashCapacity; ++probe) {
@@ -822,7 +897,8 @@ bool MetadataIndex::findGroup(const Kind kind, const std::string& key, Group& gr
       Group candidate;
       if (!readShortString(file, candidate.key) || !readShortString(file, candidate.label) ||
           file.read(reinterpret_cast<uint8_t*>(&candidate.count), sizeof(candidate.count)) != sizeof(candidate.count) ||
-          file.read(reinterpret_cast<uint8_t*>(&candidate.offset), sizeof(candidate.offset)) != sizeof(candidate.offset) ||
+          file.read(reinterpret_cast<uint8_t*>(&candidate.offset), sizeof(candidate.offset)) !=
+              sizeof(candidate.offset) ||
           candidate.count > kMaxBooksPerIndex || candidate.offset > file.size()) {
         file.close();
         return false;
@@ -839,7 +915,8 @@ bool MetadataIndex::findGroup(const Kind kind, const std::string& key, Group& gr
   return false;
 }
 
-bool MetadataIndex::loadGroup(const Kind kind, const Group& group, std::vector<Entry>& entries, const size_t maxEntries) {
+bool MetadataIndex::loadGroup(const Kind kind, const Group& group, std::vector<Entry>& entries,
+                              const size_t maxEntries) {
   entries.clear();
   FsFile file = SdMan.open(indexPath(kind).c_str(), O_READ);
   if (!file || !file.seek(group.offset)) {

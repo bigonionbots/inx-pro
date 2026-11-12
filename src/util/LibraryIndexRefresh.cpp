@@ -1,21 +1,23 @@
 #include "LibraryIndexRefresh.h"
 
 #include <Arduino.h>
+#include <GfxRenderer.h>
 #include <HalDisplay.h>
 #include <SDCardManager.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
-#include <GfxRenderer.h>
-
 #include "../activity/Activity.h"
 #include "../state/SystemSetting.h"
 #include "../system/ScreenComponents.h"
 #include "LibraryIndex.h"
+#include "MetadataIndex.h"
+#include "ThumbnailGeneration.h"
 
 namespace {
 
@@ -27,6 +29,11 @@ size_t frameSize = 0;
 ScreenComponents::LoadingProgressLayout layout{};
 volatile int current = 0;
 volatile int total = 0;
+uint8_t extras = 0;  // for the task: LibraryIndexRefresh::Extra flags of this run
+GfxRenderer* taskRenderer = nullptr;
+// Thumbnail generation draws each new thumbnail into the frame buffer (to fill the display cache)
+// while render() draws the progress bar from the main loop: both hold this.
+SemaphoreHandle_t drawLock = nullptr;
 int displayedProgress = -1;
 constexpr uint32_t stackSize = 16384;
 
@@ -42,10 +49,14 @@ void clearFrame() {
   displayedProgress = -1;
 }
 
-}
+}  // namespace
 
-void LibraryIndexRefresh::start(GfxRenderer& renderer, Activity* currentScreen, const char* message) {
+void LibraryIndexRefresh::start(GfxRenderer& renderer, Activity* currentScreen, const char* message,
+                                const uint8_t extraWork) {
   if (running || popup) return;
+  extras = extraWork;
+  taskRenderer = &renderer;
+  if (!drawLock) drawLock = xSemaphoreCreateMutex();
 
   renderer.syncWriteBufferFromActive();
   frameSize = renderer.getBufferSize();
@@ -69,6 +80,26 @@ void LibraryIndexRefresh::start(GfxRenderer& renderer, Activity* currentScreen, 
         });
         SETTINGS.useLibraryIndex = 1;
         SETTINGS.saveToFile();
+        const int books = total;
+        if (extras & EXTRA_METADATA) {
+          const MetadataIndex::Options options = MetadataIndex::existingIndexes();
+          if (MetadataIndex::any(options)) {
+            current = 0;
+            total = 0;
+            MetadataIndex::generate(options, [](const int indexed, const int count, const char*, const char*) {
+              current = indexed;
+              total = count;
+            });
+          }
+        }
+        if ((extras & EXTRA_THUMBNAILS) && taskRenderer && drawLock) {
+          // Books that already have one are skipped at once: this costs the new books.
+          current = 0;
+          total = books;
+          ThumbnailGeneration::Result result;
+          ThumbnailGeneration::generate(*taskRenderer, drawLock, result,
+                                        [](const int processed, const char*) { current = processed; });
+        }
         running = false;
         vTaskDelete(nullptr);
       },
@@ -83,7 +114,10 @@ void LibraryIndexRefresh::render(GfxRenderer& renderer) {
   const int progress = std::max(0, std::min(100, current * 100 / total));
   if (progress == displayedProgress) return;
 
+  // Thumbnail generation may be drawing into the frame buffer: wait for the next frame then.
+  if (drawLock && xSemaphoreTake(drawLock, 0) != pdTRUE) return;
   ScreenComponents::LoadingProgress::setProgress(renderer, layout, progress);
+  if (drawLock) xSemaphoreGive(drawLock);
   displayedProgress = progress;
 }
 

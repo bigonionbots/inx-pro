@@ -1,7 +1,7 @@
 #pragma once
 
-#include <functional>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -50,14 +50,16 @@ class MetadataIndex final {
   };
 
   static bool hasIndex(Kind kind);
+  /** The indexes already on the card (what the Metadata task last built), to rebuild after adding books. */
+  static Options existingIndexes();
+  static bool any(const Options& options);
   // Enumerating groups is linear in the number of displayed groups; locating a
   // known group in the current index format is expected O(1).
   static bool loadGroups(Kind kind, std::vector<Group>& groups);
   static bool findGroup(Kind kind, const std::string& key, Group& group);
   static bool loadGroup(Kind kind, const Group& group, std::vector<Entry>& entries,
                         size_t maxEntries = static_cast<size_t>(-1));
-  static bool generate(const Options& options,
-                       const std::function<void(int, int, const char*, const char*)>& progress,
+  static bool generate(const Options& options, const std::function<void(int, int, const char*, const char*)>& progress,
                        const std::function<bool()>& shouldCancel = {});
   static std::string authorKey(const std::string& author);
 };
