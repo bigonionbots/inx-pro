@@ -330,7 +330,10 @@ void begin() {
     AudioModule::logf("Link: out of memory");
     return;
   }
-  xTaskCreate(linkTask, "audio_link", TASK_STACK, nullptr, TASK_PRIORITY, &task);
+  // USB only (no flash, no Wi-Fi), and it never exits: its stack can be in PSRAM, leaving internal
+  // RAM to the Wi-Fi driver.
+  xTaskCreatePinnedToCoreWithCaps(linkTask, "audio_link", TASK_STACK, nullptr, TASK_PRIORITY, &task, tskNO_AFFINITY,
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 
 void setSuspended(const bool value) { suspended = value; }

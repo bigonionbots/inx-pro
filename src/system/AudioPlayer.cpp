@@ -385,6 +385,8 @@ void feedTaskMain(void*) {
   }
 }
 
+void ensureNetworkTasks();  // below, once the sync task is declared
+
 void postFeedJob(const FeedJob& job) {
   {
     FeedGuard guard;
@@ -392,7 +394,8 @@ void postFeedJob(const FeedJob& job) {
     jobPending = true;
     if (activeFile) activeFile->cancel();
   }
-  xTaskNotifyGive(feedTask);
+  ensureNetworkTasks();
+  if (feedTask) xTaskNotifyGive(feedTask);
 }
 
 void cancelFeed() {
@@ -498,7 +501,19 @@ void syncTaskMain(void*) {
   }
 }
 
+/**
+ * The feeder and the sync task, created the first time an Audiobookshelf book needs them: they join
+ * Wi-Fi (which may write the PHY calibration to flash), so their stacks stay in internal RAM, 22 KB
+ * that a device only reading books (and wanting Wi-Fi for KOReader sync) should not give up.
+ */
+void ensureNetworkTasks() {
+  // TLS needs a deep stack.
+  if (!feedTask) xTaskCreate(feedTaskMain, "audio_feed", 12288, nullptr, 2, &feedTask);
+  if (!syncTask) xTaskCreate(syncTaskMain, "abs_sync", 10240, nullptr, 1, &syncTask);
+}
+
 void postSync(const SyncRequest& request) {
+  ensureNetworkTasks();
   if (!syncTask) return;
   xSemaphoreTake(syncLock, portMAX_DELAY);
   if (request.push) {
@@ -1161,10 +1176,12 @@ void begin() {
   }
   feedLock = xSemaphoreCreateMutex();
   syncLock = xSemaphoreCreateMutex();
-  xTaskCreate(senderTask, "audio_send", 6144, nullptr, 3, nullptr);
-  // TLS needs a deep stack.
-  xTaskCreate(feedTaskMain, "audio_feed", 12288, nullptr, 2, &feedTask);
-  xTaskCreate(syncTaskMain, "abs_sync", 10240, nullptr, 1, &syncTask);
+  // The sender only moves the queue to the link (no flash, no Wi-Fi): its stack can be in PSRAM,
+  // leaving internal RAM to the Wi-Fi driver (it failed to start in the reader: "Expected to init
+  // 4 rx buffer"). A PSRAM-stack task must not exit, and this one never does.
+  xTaskCreatePinnedToCoreWithCaps(senderTask, "audio_send", 6144, nullptr, 3, nullptr, tskNO_AFFINITY,
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  // The feeder and the sync task start on first use (ensureNetworkTasks()).
 }
 
 std::vector<Book> listBooks() {
