@@ -14,12 +14,28 @@
 #include "images/BookmarkIcon.h"
 #include "images/FavoriteIcon.h"
 #include "images/HighlightIcon.h"
+#if INX_HAS_AUDIO_MODULE
+#include "images/Headphones.h"
+#endif
+#if INX_HAS_GAMES
+#include "images/Gamepad.h"
+#endif
 #include "images/Search.h"
 #include "images/StatisticsIcon.h"
 #include "images/Store.h"
 #include "state/SystemSetting.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
+
+#if INX_HAS_AUDIO_MODULE
+extern void onGoToAudiobooks();
+#define INX_APPS_AUDIO_ROWS 1
+#else
+#define INX_APPS_AUDIO_ROWS 0
+#endif
+#if INX_HAS_GAMES
+extern void onGoToGames();
+#endif
 
 namespace {
 struct AppItem {
@@ -36,7 +52,21 @@ constexpr AppItem kMenuItems[] = {
     {"Dictionary", "Look up saved words and definitions", BookAtlas},
     {"Store", "Install fonts, languages, dictionaries, and plugins", Store},
     {"OPDS", "Browse books from OPDS catalogs", Search},
+// t5s3_audio: the Audiobooks and Games pages, as on Home's shortcuts (full screens; Back goes Home).
+#if INX_HAS_AUDIO_MODULE
+    {"Audiobooks", "Play audiobooks through the audio module", Headphones},
+#endif
+#if INX_HAS_GAMES
+    {"Games", "Play Game Boy and Game Boy Color games", Gamepad},
+#endif
 };
+constexpr int kMenuItemCount = static_cast<int>(sizeof(kMenuItems) / sizeof(kMenuItems[0]));
+#if INX_HAS_AUDIO_MODULE
+constexpr int kAudiobooksItem = 7;
+#endif
+#if INX_HAS_GAMES
+constexpr int kGamesItem = 7 + INX_APPS_AUDIO_ROWS;
+#endif
 
 constexpr int kIconSize = 40;
 constexpr int kSideMargin = 20;
@@ -49,7 +79,10 @@ constexpr int kSubtitleGap = 5;
 int AppsActivity::bodyTop() { return FREEINK_DEVICE_X4PRO ? 80 : 70; }
 
 int AppsActivity::rowHeight() const {
-  return SETTINGS.hiddenMenu == 0 ? kCompactRowHeight : kRowHeight;
+  const int preferred = SETTINGS.hiddenMenu == 0 ? kCompactRowHeight : kRowHeight;
+  // Shorter rows when the list would run past the bottom bar (more apps than fit at full height).
+  const int available = renderer.getScreenHeight() - bodyTop() - navigation::Menu::bottomInset();
+  return std::max(1, std::min(preferred, available / std::max(1, visibleItemCount())));
 }
 
 int AppsActivity::visibleItemCount() const {
@@ -110,6 +143,16 @@ void AppsActivity::openSelected() {
     case 6:
       enterChild(new OpdsServerListActivity(renderer, mappedInput, close));
       break;
+#if INX_HAS_AUDIO_MODULE
+    case kAudiobooksItem:
+      onGoToAudiobooks();
+      break;
+#endif
+#if INX_HAS_GAMES
+    case kGamesItem:
+      onGoToGames();
+      break;
+#endif
     default:
       break;
   }

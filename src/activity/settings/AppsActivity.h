@@ -24,7 +24,6 @@ class AppsActivity final : public UiPage {
  private:
   static constexpr int kRowHeight = 100;
   static constexpr int kCompactRowHeight = 92;
-  static constexpr int kMenuItemCount = 7;
 
   std::function<void()> onBack_;
   std::unique_ptr<Activity> subActivity_;
