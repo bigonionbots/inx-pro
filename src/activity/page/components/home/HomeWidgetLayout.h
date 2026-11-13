@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../widget/Audiobooks.h"
 #include "../widget/Calendar.h"
 #include "../widget/Carousel.h"
 #include "../widget/Clock.h"
@@ -36,9 +37,10 @@ class HomeWidgetLayout final {
     Statistics,
     Heatmap,
     Library,
-    Shortcut
+    Shortcut,
+    Audiobooks
   };
-  enum class SwipeTarget { None, Carousel, Favorites, Flow, WidgetPage };
+  enum class SwipeTarget { None, Carousel, Favorites, Flow, WidgetPage, Audiobooks };
 
   struct HitResult {
     HitType type;
@@ -53,6 +55,9 @@ class HomeWidgetLayout final {
   void invalidateFavorites() const;
   int favoriteCount() const;
   const std::string& favoritePath(int index) const;
+  /** The Audiobook Carousel: turn it by one book (a swipe), or back to the most recent. */
+  void turnAudiobooks(int direction) const;
+  void resetAudiobooks() const { audiobookIndex_ = 0; }
   const char* libraryFolder(const HomeTheme::Theme& theme, int slot) const;
   void renderSleep(const HomeTheme::Theme& theme) const;
   bool needsRefresh(const HomeTheme::Theme& theme) const;
@@ -102,6 +107,7 @@ class HomeWidgetLayout final {
   int recentAt(const HomeTheme::Theme& theme, int x, int y) const;
   int recentGridAt(const HomeTheme::Theme& theme, int widgetPageIndex, int recentGridPageIndex, int x, int y) const;
   int favoritesAt(const HomeTheme::Theme& theme, int carouselIndex, int x, int y) const;
+  int audiobooksAt(const HomeTheme::Theme& theme, int x, int y) const;
   int todaysReadingAt(const HomeTheme::Theme& theme, int x, int y) const;
   int heatmapAt(const HomeTheme::Theme& theme, int x, int y) const;
   int libraryAt(const HomeTheme::Theme& theme, int x, int y) const;
@@ -127,4 +133,6 @@ class HomeWidgetLayout final {
   LibraryWidget library_;
   Description description_;
   PluginWidget plugin_;
+  Audiobooks audiobooks_;
+  mutable int audiobookIndex_ = 0;
 };

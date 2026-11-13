@@ -34,6 +34,8 @@ extern void onGoToStatistics();
 extern void onGoToHeatmapReport(HomeTheme::HeatmapView view);
 #if INX_HAS_AUDIO_MODULE
 extern void onGoToAudiobooks();
+/** Plays the audiobook at this index of the recent list and opens the player. */
+extern void onPlayRecentAudiobook(int index);
 #endif
 #if INX_HAS_GAMES
 extern void onGoToGames();
@@ -88,6 +90,7 @@ void Home::onEnter() {
   recentGridPageIndex = 0;
   flowIndex = 0;
   widgetLayout.invalidateFavorites();
+  widgetLayout.resetAudiobooks();
   carouselThumbnailsPreloaded = false;
   deferThumbnailDecode_ = true;
   thumbnailWarmupPending_ = false;
@@ -99,9 +102,7 @@ void Home::onEnter() {
   tapRejectLogged_ = false;
 }
 
-void Home::menu() {
-  UiPage::menu();
-}
+void Home::menu() { UiPage::menu(); }
 
 void Home::title() const {
   const int font = systemFontIdForPointSize(16);
@@ -146,7 +147,8 @@ void Home::loop() {
 
 void Home::content() {
   renderer.setDeferImageDecode(deferThumbnailDecode_);
-  widgetLayout.render(HomeTheme::active(), carouselIndex, favoriteIndex, widgetPageIndex, recentGridPageIndex, flowIndex);
+  widgetLayout.render(HomeTheme::active(), carouselIndex, favoriteIndex, widgetPageIndex, recentGridPageIndex,
+                      flowIndex);
   renderer.setDeferImageDecode(false);
   if (deferThumbnailDecode_) {
     deferThumbnailDecode_ = false;
@@ -194,8 +196,8 @@ bool Home::handleSwipe() {
   const bool swipeUp = mappedInput.wasTouchSwipeUp();
   const bool swipeDown = !swipeUp && mappedInput.wasTouchSwipeDown();
   if (swipeUp || swipeDown) {
-    const int pageCount = widgetLayout.recentGridPageCount(HomeTheme::active(), widgetPageIndex,
-                                                          RECENT_BOOKS.getCount());
+    const int pageCount =
+        widgetLayout.recentGridPageCount(HomeTheme::active(), widgetPageIndex, RECENT_BOOKS.getCount());
     if (pageCount > 1) {
       recentGridPageIndex = (recentGridPageIndex + pageCount + (swipeUp ? 1 : -1)) % pageCount;
       updateRequired = true;
@@ -210,22 +212,29 @@ bool Home::handleSwipe() {
   float swipeNx = 0.0f;
   float swipeNy = 0.0f;
   const bool swipeLeftInScreen = mappedInput.wasTouchSwipeLeftInScreen(renderer, swipeNx, swipeNy);
-  const bool swipeRightInScreen = !swipeLeftInScreen && mappedInput.wasTouchSwipeRightInScreen(renderer, swipeNx, swipeNy);
+  const bool swipeRightInScreen =
+      !swipeLeftInScreen && mappedInput.wasTouchSwipeRightInScreen(renderer, swipeNx, swipeNy);
   const bool swipeLeft = swipeLeftInScreen || mappedInput.wasTouchSwipeLeft();
   const bool swipeRight = !swipeLeft && (swipeRightInScreen || mappedInput.wasTouchSwipeRight());
   if (!swipeLeft && !swipeRight) return false;
 
-  const int swipeX = (swipeLeftInScreen || swipeRightInScreen)
-                         ? static_cast<int>(swipeNx * renderer.getScreenWidth())
-                         : renderer.getScreenWidth() / 2;
-  const int swipeY = (swipeLeftInScreen || swipeRightInScreen)
-                         ? static_cast<int>(swipeNy * renderer.getScreenHeight())
-                         : navigation::Menu::height +
-                               (renderer.getScreenHeight() - navigation::Menu::height - navigation::Menu::bottomInset()) / 2;
+  const int swipeX = (swipeLeftInScreen || swipeRightInScreen) ? static_cast<int>(swipeNx * renderer.getScreenWidth())
+                                                               : renderer.getScreenWidth() / 2;
+  const int swipeY =
+      (swipeLeftInScreen || swipeRightInScreen)
+          ? static_cast<int>(swipeNy * renderer.getScreenHeight())
+          : navigation::Menu::height +
+                (renderer.getScreenHeight() - navigation::Menu::height - navigation::Menu::bottomInset()) / 2;
   const HomeWidgetLayout::SwipeTarget target =
       widgetLayout.horizontalSwipeTarget(HomeTheme::active(), widgetPageIndex, swipeX, swipeY);
   if (target == HomeWidgetLayout::SwipeTarget::Carousel) {
     advanceCarousel(swipeLeft ? 1 : -1);
+    return true;
+  }
+  if (target == HomeWidgetLayout::SwipeTarget::Audiobooks) {
+    widgetLayout.turnAudiobooks(swipeLeft ? 1 : -1);
+    updateRequired = true;
+    renderPage();
     return true;
   }
   if (target == HomeWidgetLayout::SwipeTarget::Favorites) {
@@ -342,6 +351,12 @@ bool Home::handleTap() {
     if (!path.empty()) openReaderFromCallback(path, [] { onGoToHome(); });
     return true;
   }
+#if INX_HAS_AUDIO_MODULE
+  if (favoriteHit.type == HomeWidgetLayout::HitType::Audiobooks) {
+    onPlayRecentAudiobook(favoriteHit.index);
+    return true;
+  }
+#endif
   if (favoriteHit.type == HomeWidgetLayout::HitType::Library) {
     onGoToLibrary(widgetLayout.libraryFolder(HomeTheme::active(), favoriteHit.index));
     return true;
@@ -479,9 +494,9 @@ void Home::popup() const {
   }
   const PopUpBounds box = PopUp::bounds(renderer, static_cast<int>(items.size()));
   PopUp::background(renderer, box);
-  PopUp::title(renderer, box, heatmapPopupOpen ? "Heatmap"
-                                               : (statisticsPopupOpen ? "Statistics"
-                                                                       : (favoritePopupOpen ? "Favorite" : "Book")));
+  PopUp::title(
+      renderer, box,
+      heatmapPopupOpen ? "Heatmap" : (statisticsPopupOpen ? "Statistics" : (favoritePopupOpen ? "Favorite" : "Book")));
   PopUp::list(renderer, box, items, -1, 0);
   PopUp::border(renderer, box);
 }

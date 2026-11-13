@@ -26,6 +26,7 @@
 
 #include "AudioLink.h"
 #include "AudioModule.h"
+#include "ListeningLog.h"
 #include "abs/AbsClient.h"
 #include "abs/AbsCovers.h"
 #include "abs/AbsLocal.h"
@@ -415,7 +416,8 @@ struct SyncRequest {
   uint32_t bookMs = 0;
   uint32_t durationMs = 0;
   bool finished = false;
-  uint64_t syncedUpdateMs = 0;  ///< a push: the server's lastUpdate at our last sync
+  uint64_t syncedUpdateMs = 0;                 ///< a push: the server's lastUpdate at our last sync
+  std::vector<ListeningLog::Upload> sessions;  ///< a push: listening sessions to upload with it
 };
 
 struct SyncResult {
@@ -426,6 +428,7 @@ struct SyncResult {
   std::string error;
   Abs::Progress progress;
   uint32_t pushedBookMs = 0;
+  std::vector<std::pair<std::string, uint32_t>> uploaded;  ///< sessions the server took (id, listened ms)
 };
 
 SemaphoreHandle_t syncLock = nullptr;
@@ -477,6 +480,19 @@ void syncTaskMain(void*) {
         const bool movedElsewhere = server.exists && server.lastUpdateMs != request.syncedUpdateMs &&
                                     !(request.itemId == ownPushItemId && server.lastUpdateMs == ownPushUpdateMs) &&
                                     server.currentMs > request.bookMs + SYNC_TOLERANCE_MS;
+        // Listening sessions (the server's listening stats). Not this book's when another device
+        // moved it on: a session carries our position, which the server would apply.
+        if (result.ok && request.push) {
+          for (const ListeningLog::Upload& upload : request.sessions) {
+            if (movedElsewhere && upload.itemId == request.itemId) continue;
+            std::string ignored;
+            if (Abs::syncLocalSession(upload.body, ignored)) {
+              result.uploaded.emplace_back(upload.id, upload.listenedMs);
+            } else {
+              AudioModule::logf("Sync: listening session not sent: %s", ignored.c_str());
+            }
+          }
+        }
         if (result.ok && request.push && movedElsewhere) {
           result.push = false;
           AudioModule::logf("Sync: not pushing %lu s, the server is at %lu s",
@@ -568,7 +584,7 @@ std::string coverPath;                   // see View::coverPath
 uint32_t pausedAtMs = 0;                 // when the current pause began
 uint32_t handedWifiAtMs = 0;             // resumeAfterScreen() holds an AbsWifi user since then (0: none)
 bool wifiParked = false;                 // streamed book paused long enough to stop the stream
-std::string bookAuthor;                  // streamed books: for the recent list
+std::string bookAuthor;                  // for the recent list ("" when unknown)
 int track = 0;
 std::unique_ptr<AudioSource> source;  // SD tracks only; streamed tracks live on the feeder task
 uint32_t trackDurationMs = 0;
@@ -583,6 +599,9 @@ uint32_t lastSaveMs = 0;
 uint32_t lastModuleTryMs = 0;
 uint32_t retryStreamAtMs = 0;
 std::string message;
+
+uint32_t listenedMs = 0;    // heard since the last flushListening()
+uint32_t listenTickMs = 0;  // when service() last counted it (0: not playing)
 
 bool syncDirty = false;
 uint64_t syncedUpdateMs = 0;
@@ -629,8 +648,8 @@ constexpr const char* LOCAL_COVERS = "/.system/cache/audio-covers";
 constexpr const char* RECENT_FILE = "/.system/audio_recent.json";
 constexpr size_t RECENT_MAX = 8;
 
-std::vector<RecentStream> loadRecent() {
-  std::vector<RecentStream> out;
+std::vector<RecentAudiobook> loadRecent() {
+  std::vector<RecentAudiobook> out;
   SdIoMutex::Lock lock;
   FsFile file = SdMan.open(RECENT_FILE, O_RDONLY);
   if (!file) return out;
@@ -641,24 +660,34 @@ std::vector<RecentStream> loadRecent() {
   JsonDocument doc;
   if (deserializeJson(doc, text) != DeserializationError::Ok) return out;
   for (JsonObject r : doc.as<JsonArray>()) {
-    RecentStream entry;
+    RecentAudiobook entry;
     entry.itemId = r["id"] | "";
+    entry.path = r["path"] | "";
+    entry.folder = r["folder"] | false;
     entry.title = r["title"] | "";
     entry.author = r["author"] | "";
+    entry.coverPath = r["cover"] | "";
     entry.positionMs = r["positionMs"] | 0u;
     entry.durationMs = r["durationMs"] | 0u;
-    if (!entry.itemId.empty()) out.push_back(entry);
+    // Entries written before local books were listed are streamed books: cover by item id.
+    if (entry.coverPath.empty() && !entry.itemId.empty()) entry.coverPath = AbsCovers::path(entry.itemId);
+    if (!entry.itemId.empty() || !entry.path.empty()) out.push_back(entry);
   }
   return out;
 }
 
-void saveRecent(const std::vector<RecentStream>& recent) {
+void saveRecent(const std::vector<RecentAudiobook>& recent) {
   JsonDocument doc;
-  for (const RecentStream& r : recent) {
+  for (const RecentAudiobook& r : recent) {
     JsonObject o = doc.add<JsonObject>();
-    o["id"] = r.itemId;
+    if (!r.itemId.empty()) o["id"] = r.itemId;
+    if (!r.path.empty()) {
+      o["path"] = r.path;
+      o["folder"] = r.folder;
+    }
     o["title"] = r.title;
     o["author"] = r.author;
+    if (!r.coverPath.empty()) o["cover"] = r.coverPath;
     o["positionMs"] = r.positionMs;
     o["durationMs"] = r.durationMs;
   }
@@ -672,14 +701,26 @@ void saveRecent(const std::vector<RecentStream>& recent) {
   file.close();
 }
 
-/** The streamed book to the front of the recent list, with its position now. */
-void noteRecent(const std::string& itemId, const std::string& title, const std::string& author,
-                const uint32_t positionMs, const uint32_t durationMs) {
-  std::vector<RecentStream> recent = loadRecent();
-  recent.erase(
-      std::remove_if(recent.begin(), recent.end(), [&itemId](const RecentStream& r) { return r.itemId == itemId; }),
-      recent.end());
-  recent.insert(recent.begin(), RecentStream{itemId, title, author, positionMs, durationMs});
+bool sameRecent(const RecentAudiobook& a, const RecentAudiobook& b) {
+  return a.itemId.empty() && b.itemId.empty() ? a.path == b.path : a.itemId == b.itemId;
+}
+
+/** The book to the front of the recent list, with its position now. */
+void noteRecent(RecentAudiobook entry) {
+  std::vector<RecentAudiobook> recent = loadRecent();
+  for (auto it = recent.begin(); it != recent.end(); ++it) {
+    if (!sameRecent(*it, entry)) continue;
+    // Streaming a book that was also downloaded: keep where the download is.
+    if (entry.path.empty()) {
+      entry.path = it->path;
+      entry.folder = it->folder;
+    }
+    if (entry.coverPath.empty()) entry.coverPath = it->coverPath;
+    if (entry.author.empty()) entry.author = it->author;
+    recent.erase(it);
+    break;
+  }
+  recent.insert(recent.begin(), entry);
   if (recent.size() > RECENT_MAX) recent.resize(RECENT_MAX);
   saveRecent(recent);
 }
@@ -786,6 +827,35 @@ uint32_t bookDurationMs() {
   return tracks.back().startOffsetMs + tracks.back().durationMs;
 }
 
+/** The open book as a recent-list entry, with its position now. */
+RecentAudiobook currentRecent() {
+  RecentAudiobook r;
+  r.itemId = book.absItemId;
+  if (!remote) {
+    r.path = book.path;
+    r.folder = book.folder;
+  }
+  r.title = book.title;
+  r.author = bookAuthor;
+  r.coverPath = coverPath;
+  r.positionMs = bookMs();
+  r.durationMs = bookDurationMs();
+  if (!isAbsBook() && tracks.size() > 1) {
+    // A folder of files: no offsets from a server. Sum the track lengths, once all are known.
+    uint32_t before = 0;
+    uint32_t total = 0;
+    bool known = true;
+    for (int i = 0; i < static_cast<int>(tracks.size()); ++i) {
+      if (tracks[i].durationMs == 0) known = false;
+      if (i < track) before += tracks[i].durationMs;
+      total += tracks[i].durationMs;
+    }
+    r.positionMs = before + positionMs;
+    r.durationMs = known ? total : 0;
+  }
+  return r;
+}
+
 // Progress file, one line per book: "<track>\t<ms>\t<dirty>\t<synced>\t<key>". Lines from the first
 // version have only "<track>\t<ms>\t<key>".
 std::vector<std::pair<std::string, Progress>> loadAllProgress() {
@@ -835,10 +905,41 @@ std::vector<std::pair<std::string, Progress>> loadAllProgress() {
   return entries;
 }
 
+/** Hands the time heard since the last call to the listening log (stats, server sessions). */
+void flushListening() {
+  if (!isOpen || listenedMs == 0) return;
+  const RecentAudiobook r = currentRecent();
+  ListeningLog::BookInfo info;
+  info.key = r.itemId.empty() ? r.path : r.itemId;
+  info.itemId = r.itemId;
+  info.title = r.title;
+  info.author = r.author;
+  info.positionMs = r.positionMs;
+  info.durationMs = r.durationMs;
+  ListeningLog::record(info, listenedMs);
+  listenedMs = 0;
+}
+
+/** Counts listening: time the module plays our stream (main loop, every service()). */
+void countListening() {
+  const AudioLink::ModuleStatus module = AudioLink::status();
+  const bool playing = isOpen && !paused && streamActive && module.valid && module.status.streamId == streamId &&
+                       static_cast<PlayState>(module.status.playState) == PlayState::Playing;
+  if (!playing) {
+    listenTickMs = 0;
+    return;
+  }
+  const uint32_t now = millis();
+  // A stalled loop still counts (the module kept playing), up to a bound.
+  if (listenTickMs != 0) listenedMs += std::min<uint32_t>(now - listenTickMs, 30000);
+  listenTickMs = now;
+}
+
 void saveProgress() {
   if (!isOpen) return;
-  // A streamed book keeps its place on the Audiobooks page's recent list.
-  if (remote) noteRecent(book.absItemId, book.title, bookAuthor, bookMs(), bookDurationMs());
+  flushListening();
+  // The recent list (Audiobooks page, Home widget) keeps the book's place.
+  noteRecent(currentRecent());
   if (isAbsBook()) {
     const uint32_t now = bookMs();
     const uint32_t moved = now > lastPushedBookMs ? now - lastPushedBookMs : lastPushedBookMs - now;
@@ -881,6 +982,8 @@ void requestPush(const bool onlyIfConnected = false) {
   request.durationMs = bookDurationMs();
   request.finished = finished;
   request.syncedUpdateMs = syncedUpdateMs;
+  flushListening();  // so the sessions carry the time up to now
+  request.sessions = ListeningLog::pendingUploads();
   postSync(request);
   lastPushMs = millis();
 }
@@ -1089,7 +1192,13 @@ void updateFromModule() {
  */
 void applySyncResult() {
   const SyncResult result = takeSyncResult();
-  if (!result.valid || !isOpen || result.itemId != book.absItemId) return;
+  if (!result.valid) return;
+  for (const auto& upload : result.uploaded) ListeningLog::uploaded(upload.first, upload.second);
+  if (!result.uploaded.empty()) {
+    AudioModule::logf("Sync: %u listening session%s sent", static_cast<unsigned>(result.uploaded.size()),
+                      result.uploaded.size() == 1 ? "" : "s");
+  }
+  if (!isOpen || result.itemId != book.absItemId) return;
   if (!result.push) {
     AudioModule::logf(
         "Sync: %s, server %s at %lu s, here %lu s%s", result.ok ? "fetched" : "fetch failed",
@@ -1219,7 +1328,20 @@ std::vector<Book> listBooks() {
   return books;
 }
 
-std::vector<RecentStream> recentStreams() { return loadRecent(); }
+std::vector<RecentAudiobook> recentAudiobooks() { return loadRecent(); }
+
+bool openRecent(const RecentAudiobook& recent) {
+  if (recent.path.empty()) return false;
+  {
+    SdIoMutex::Lock lock;
+    if (!SdMan.exists(recent.path.c_str())) return false;
+  }
+  Book b;
+  b.path = recent.path;
+  b.title = recent.title;
+  b.folder = recent.folder;
+  return open(b);
+}
 
 std::string coverFor(const Book& b) {
   if (!b.absItemId.empty() && AbsCovers::cached(b.absItemId)) return AbsCovers::path(b.absItemId);
@@ -1249,8 +1371,10 @@ bool open(const Book& next) {
       return TrackInfo{next.path + "/" + t.filename, "", t.filename, t.startOffsetMs, t.durationMs};
     });
     bookChapters = meta.chapters;
+    bookAuthor = meta.author;
   } else {
     book.absItemId.clear();
+    bookAuthor.clear();
     std::vector<std::string> files;
     {
       SdIoMutex::Lock lock;
@@ -1276,6 +1400,7 @@ bool open(const Book& next) {
   const bool started = startBook();  // opens the first track, which may have embedded art
   // Last resort for an Audiobookshelf book: the server's cover, shown once it has been fetched.
   if (coverPath.empty() && isAbsBook()) coverPath = AbsCovers::path(book.absItemId);
+  if (started) noteRecent(currentRecent());
   return started;
 }
 
@@ -1302,13 +1427,14 @@ bool openRemote(const Abs::ItemDetail& item) {
   }
   progressKey = ABS_KEY_PREFIX + item.id;
   const bool started = startBook();
-  if (started) noteRecent(item.id, item.title, item.author, bookMs(), bookDurationMs());
+  if (started) noteRecent(currentRecent());
   return started;
 }
 
 void stop() {
   if (!isOpen) return;
   saveProgress();
+  ListeningLog::endSession();  // the next book (or this one again) starts a new session
   requestPush();
   stopStream();
   source.reset();
@@ -1573,6 +1699,7 @@ void service() {
 
   updateFromFeeder();
   updateFromModule();
+  countListening();
   refill();
   applySyncResult();
   if (!paused && streamActive && millis() - lastSaveMs >= SAVE_INTERVAL_MS) saveProgress();

@@ -71,21 +71,32 @@ struct View {
   std::string coverPath;
 };
 
-/** An Audiobookshelf book streamed recently (/.system/audio_recent.json), for the Audiobooks page. */
-struct RecentStream {
-  std::string itemId;
+/**
+ * A recently played audiobook (/.system/audio_recent.json), for the Audiobooks page and the Home
+ * widget: streamed, downloaded or a book in /Audiobooks. Keyed by itemId when it has one, else path.
+ */
+struct RecentAudiobook {
+  std::string itemId;  ///< Audiobookshelf item, "" for a book that is only on the card
+  std::string path;    ///< the book on the card (file or folder), "" if only streamed
+  bool folder = false;
   std::string title;
   std::string author;
+  std::string coverPath;    ///< image on the card when last played ("" if none; may not exist yet)
   uint32_t positionMs = 0;  ///< in the whole book, when last saved
-  uint32_t durationMs = 0;
+  uint32_t durationMs = 0;  ///< 0 if unknown
 };
 
 /** Starts the sender task. Call once at boot. */
 void begin();
 
 std::vector<Book> listBooks();
-/** Recently streamed books, most recent first (at most a few). Main loop (SD). */
-std::vector<RecentStream> recentStreams();
+/** Recently played audiobooks, most recent first (at most RECENT_MAX). Main loop (SD). */
+std::vector<RecentAudiobook> recentAudiobooks();
+/**
+ * Plays a recent book from the card (its file or folder, if still there) at its saved position.
+ * False if it is not on the card: stream it through Audiobookshelf instead (itemId). Main loop.
+ */
+bool openRecent(const RecentAudiobook& recent);
 /** A book's cover image if one is already on the card (no audio file is opened), else "". */
 std::string coverFor(const Book& book);
 /** Streams an Audiobookshelf item over Wi-Fi from its saved (and synced) position. */

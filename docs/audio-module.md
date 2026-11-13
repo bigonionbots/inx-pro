@@ -122,9 +122,12 @@ a PCM5102A, or a silent test sink.
 **Using it.** Copy books to `/Audiobooks` on the SD card. Each book is one `.m4b` / `.m4a` / `.mp4` /
 `.mp3` file, or a folder of them, played in natural name order ("Part 2" before "Part 10").
 **Home -> Shortcuts -> Audiobooks** lists them under **On this device** (with covers), below
-**Recently streamed**: the last Audiobookshelf books streamed (`/.system/audio_recent.json`, kept
-up to date as they play), with their progress. Tapping one carries on: it opens on Audiobookshelf,
-which asks for Wi-Fi if needed, and plays the downloaded copy if there is one, else streams it. Pick one and it resumes where you left off;
+**Recent**: the last eight audiobooks played, streamed, downloaded or local
+(`/.system/audio_recent.json`, kept up to date as they play), with their progress. Tapping one
+carries on: a book on the card plays at once (no Wi-Fi); a streamed-only one opens on
+Audiobookshelf, which asks for Wi-Fi if needed. The same list feeds the **Audiobook Carousel** Home
+widget (theme picker; Left or Centered, swipe to turn), where a tap resumes the book and opens the
+player. Pick one and it resumes where you left off;
 progress is in `/.system/audio_progress.txt`.
 - The **Output** view picks Bluetooth headphones (Scan, tap the headset in pairing mode;
   it is remembered and reconnects), the wired DAC, or the silent test sink.
@@ -331,6 +334,25 @@ How a book downloads:
 - the main loop writes them to the card (`AbsQueue::service()` -> `AbsDownloader::service()`),
   because SD access from other tasks races the reader;
 - a paused download continues from the bytes already on the card.
+
+**Listening time.** `ListeningLog` counts the time the module plays the open book (whatever the
+source) into `/.system/audio_stats.json`: a total, per day (from the RTC) and per book. For an
+Audiobookshelf book it also keeps listening sessions in `/.system/abs_sessions.json`: one per book,
+day and stretch of listening (a pause of 30 min or more starts a new one), with a random UUID. Each
+progress push uploads up to four sessions with new time through `POST /api/session/local`, the
+route the apps use for offline playback: sent again with the same id, a session's time is
+replaced, so a failed upload is just sent with a later push, and time listened offline reaches the
+server once a push goes out with Wi-Fi on. The server counts these sessions in its listening stats
+(device "Inx Pro"). It also applies a session's position unless its progress is newer, so a push
+that finds the book moved on by another device skips that book's session. Sessions need a set
+clock (UTC from the time zone setting); without one only the local total counts.
+
+**Listening stats.** Audiobooks -> **Stats** (`ListeningStatsActivity`) shows two views: **This
+device** (`ListeningLog`'s counts) and **Audiobookshelf** (`GET /api/me/listening-stats`, fetched
+when first shown on the shared `AbsWorker` task, Wi-Fi on demand). Each has today, the last 7 days
+and the total, a bar per day for the last 14 days and the most listened books; the server view adds
+its 10 recent sessions with the device they were played on. The server's reply carries whole
+sessions (chapters, metadata), so it is parsed with a filter into a PSRAM-allocated document.
 
 **Progress sync.** Downloaded and streamed copies of a book share one local progress entry
 (`abs:<itemId>` in `/.system/audio_progress.txt`). It is reconciled with `GET`/`PATCH

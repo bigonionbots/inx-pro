@@ -34,6 +34,7 @@ constexpr uint8_t kLegacyCarouselShadowStyleVersion = 9;
 constexpr uint8_t kSleepThemeVersion = 3;
 constexpr uint8_t kLegacyPluginWidgetVersion = 22;
 constexpr uint8_t kLegacyPluginWidget = 14;
+constexpr uint8_t kLegacyAudiobooksWidget = 15;
 constexpr int kMaxThemes = 8;
 
 // These tables are persistent settings, not hot rendering buffers. Allocate
@@ -169,7 +170,7 @@ void ensureLoaded() {
 bool validLayout(const uint8_t value) { return value <= static_cast<uint8_t>(Layout::HalfBottom); }
 
 bool validWidget(const uint8_t value) {
-  return value <= static_cast<uint8_t>(Widget::Plugin);
+  return value <= static_cast<uint8_t>(Widget::Audiobooks);
 }
 
 bool validBorder(const uint8_t value) {
@@ -191,11 +192,14 @@ bool defaultBackground(const Widget widget) {
 }
 
 bool defaultCarouselLabel(const Widget widget) {
-  return widget == Widget::Carousel || widget == Widget::Favorites || widget == Widget::Heatmap;
+  return widget == Widget::Carousel || widget == Widget::Favorites || widget == Widget::Heatmap ||
+         widget == Widget::Audiobooks;
 }
 
 CarouselStyle defaultCarouselStyleForWidget(const Widget widget) {
-  return widget == Widget::Favorites || widget == Widget::Recent ? CarouselStyle::Left : CarouselStyle::Centered;
+  return widget == Widget::Favorites || widget == Widget::Recent || widget == Widget::Audiobooks
+             ? CarouselStyle::Left
+             : CarouselStyle::Centered;
 }
 
 void setDefaultBackgrounds(Theme& theme) {
@@ -316,9 +320,12 @@ void load() {
     for (Widget& widget : theme.widgets) {
       uint8_t value = 0;
       serialization::readPod(file, value);
-      // Before upstream's 1.3.0 widgets took 14-18, this fork saved the plugin widget as 14.
+      // Before upstream's 1.3.0 widgets took 14-18, this fork saved the plugin widget as 14 and
+      // the Audiobook Carousel as 15.
       if (version <= kLegacyPluginWidgetVersion && value == kLegacyPluginWidget) {
         value = static_cast<uint8_t>(Widget::Plugin);
+      } else if (version <= kLegacyPluginWidgetVersion && value == kLegacyAudiobooksWidget) {
+        value = static_cast<uint8_t>(Widget::Audiobooks);
       }
       if (!validWidget(value)) {
         return false;
@@ -1141,6 +1148,8 @@ const char* widgetLabel(const Widget widget) {
       return "Book Details";
     case Widget::Plugin:
       return "Plugin Widget";
+    case Widget::Audiobooks:
+      return "Audiobook Carousel";
     case Widget::RecentGrid:
       return "Recent 3 x 2 Grid";
     case Widget::Flow:

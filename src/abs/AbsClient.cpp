@@ -912,6 +912,79 @@ bool updateProgress(const std::string& itemId, const uint32_t currentMs, const u
   return api(HTTP_METHOD_PATCH, "/api/me/progress/" + itemId, body, response, error);
 }
 
+bool listeningStats(ListeningStats& out, std::string& error) {
+  static PsramJsonAllocator psram;
+  out = ListeningStats{};
+  Response response;
+  if (!api(HTTP_METHOD_GET, "/api/me/listening-stats", "", response, error)) return false;
+  // The reply holds whole sessions (chapters, metadata): keep only what the screen shows.
+  JsonDocument filter(&psram);
+  filter["totalTime"] = true;
+  filter["today"] = true;
+  filter["days"]["*"] = true;
+  JsonObject item = filter["items"]["*"].to<JsonObject>();
+  item["timeListening"] = true;
+  item["mediaMetadata"]["title"] = true;
+  item["mediaMetadata"]["author"] = true;  // podcasts
+  item["mediaMetadata"]["authors"][0]["name"] = true;
+  JsonObject session = filter["recentSessions"][0].to<JsonObject>();
+  session["displayTitle"] = true;
+  session["displayAuthor"] = true;
+  session["timeListening"] = true;
+  session["date"] = true;
+  session["deviceInfo"]["clientName"] = true;
+  session["deviceInfo"]["deviceName"] = true;
+  session["deviceInfo"]["model"] = true;
+  session["deviceInfo"]["osName"] = true;
+  session["deviceInfo"]["browserName"] = true;
+  JsonDocument doc(&psram);
+  if (deserializeJson(doc, response.body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) {
+    error = "Unexpected reply from the server";
+    return false;
+  }
+  response.body.clear();
+  out.totalSeconds = static_cast<uint32_t>(doc["totalTime"] | 0.0);
+  out.todaySeconds = static_cast<uint32_t>(doc["today"] | 0.0);
+  for (JsonPair day : doc["days"].as<JsonObject>()) {
+    out.days.push_back({day.key().c_str(), static_cast<uint32_t>(day.value() | 0.0)});
+  }
+  std::sort(out.days.begin(), out.days.end(), [](const ListeningStats::Day& a, const ListeningStats::Day& b) {
+    return a.date < b.date;  // YYYY-MM-DD sorts as text
+  });
+  if (out.days.size() > 60) out.days.erase(out.days.begin(), out.days.end() - 60);
+  for (JsonPair entry : doc["items"].as<JsonObject>()) {
+    JsonObject value = entry.value().as<JsonObject>();
+    ListeningStats::Book book;
+    book.title = value["mediaMetadata"]["title"] | "";
+    book.author = value["mediaMetadata"]["author"] | "";
+    if (book.author.empty()) book.author = value["mediaMetadata"]["authors"][0]["name"] | "";
+    book.seconds = static_cast<uint32_t>(value["timeListening"] | 0.0);
+    if (book.seconds > 0) out.books.push_back(book);
+  }
+  std::sort(out.books.begin(), out.books.end(),
+            [](const ListeningStats::Book& a, const ListeningStats::Book& b) { return a.seconds > b.seconds; });
+  if (out.books.size() > 10) out.books.resize(10);
+  for (JsonObject s : doc["recentSessions"].as<JsonArray>()) {
+    ListeningStats::Session entry;
+    entry.title = s["displayTitle"] | "";
+    entry.author = s["displayAuthor"] | "";
+    entry.date = s["date"] | "";
+    entry.seconds = static_cast<uint32_t>(s["timeListening"] | 0.0);
+    JsonObject device = s["deviceInfo"];
+    for (const char* key : {"clientName", "deviceName", "model", "browserName", "osName"}) {
+      entry.device = device[key] | "";
+      if (!entry.device.empty()) break;
+    }
+    out.recent.push_back(entry);
+  }
+  return true;
+}
+
+bool syncLocalSession(const std::string& body, std::string& error) {
+  Response response;
+  return api(HTTP_METHOD_POST, "/api/session/local", body, response, error);
+}
+
 }  // namespace Abs
 
 #endif  // INX_HAS_AUDIO_MODULE

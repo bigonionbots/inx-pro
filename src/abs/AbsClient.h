@@ -155,6 +155,38 @@ bool libraryIndex(const std::string& libraryId, AbsIndex& out, std::string& erro
 bool progress(const std::string& itemId, Progress& out, std::string& error);
 bool updateProgress(const std::string& itemId, uint32_t currentMs, uint32_t durationMs, bool finished,
                     std::string& error);
+/**
+ * Uploads a listening session (POST /api/session/local, as the apps do for offline playback): body is
+ * the session's JSON (ListeningLog::Session::json()). Sent again with the same id, it replaces the
+ * session's listening time. Counts in the server's listening stats.
+ */
+bool syncLocalSession(const std::string& body, std::string& error);
+
+/** The user's listening stats (GET /api/me/listening-stats); times in seconds. */
+struct ListeningStats {
+  uint32_t totalSeconds = 0;
+  uint32_t todaySeconds = 0;
+  struct Day {
+    std::string date;  ///< YYYY-MM-DD
+    uint32_t seconds = 0;
+  };
+  std::vector<Day> days;  ///< oldest first, at most the last 60 with listening
+  struct Book {
+    std::string title;
+    std::string author;
+    uint32_t seconds = 0;
+  };
+  std::vector<Book> books;  ///< most listened first, at most 10
+  struct Session {
+    std::string title;
+    std::string author;
+    std::string device;  ///< the app or device it was played on
+    std::string date;    ///< YYYY-MM-DD
+    uint32_t seconds = 0;
+  };
+  std::vector<Session> recent;  ///< newest first (the server sends 10)
+};
+bool listeningStats(ListeningStats& out, std::string& error);
 
 /** Absolute URL for a server-relative path such as a track's contentUrl. */
 std::string url(const std::string& path);

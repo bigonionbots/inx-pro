@@ -23,6 +23,7 @@
 #include "abs/AbsLocal.h"
 #include "abs/AbsQueue.h"
 #include "abs/AbsWifi.h"
+#include "abs/AbsWorker.h"
 #include "activity/network/WifiSelectionActivity.h"
 #include "activity/page/SubPage.h"
 #include "activity/util/KeyboardEntryActivity.h"
@@ -92,38 +93,6 @@ std::string formatMb(const uint64_t bytes) {
 struct WorkerJob {
   std::function<void()> body;
 };
-
-/**
- * The screen's network work (sign in, load a book, ...) runs on one long-lived task with its
- * stack in PSRAM, created on first use and kept: a new 12 KB internal-RAM stack per job often
- * did not fit once streaming had fragmented internal RAM ("Out of memory" on picking a book).
- * A task with a PSRAM stack should not delete itself anyway. One job at a time (`busy`).
- */
-QueueHandle_t workerQueue = nullptr;
-
-void workerMain(void*) {
-  for (;;) {
-    WorkerJob* raw = nullptr;
-    if (xQueueReceive(workerQueue, &raw, portMAX_DELAY) != pdTRUE) continue;
-    std::unique_ptr<WorkerJob> job(raw);
-    job->body();
-  }
-}
-
-/** Hands `job` to the worker (which deletes it). False if the worker could not be created. */
-bool postWork(WorkerJob* job) {
-  if (!workerQueue) {
-    workerQueue = xQueueCreate(2, sizeof(WorkerJob*));  // before the task, which reads it
-    if (!workerQueue) return false;
-    if (xTaskCreatePinnedToCoreWithCaps(workerMain, "abs_ui", WORKER_STACK, nullptr, 1, nullptr, tskNO_AFFINITY,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-      vQueueDelete(workerQueue);
-      workerQueue = nullptr;
-      return false;
-    }
-  }
-  return xQueueSend(workerQueue, &job, 0) == pdTRUE;
-}
 
 }  // namespace
 
@@ -396,8 +365,8 @@ void AbsActivity::startWork(const char* text, std::function<void(std::string& er
   busyText = text;
   error.clear();
   updateRequired = true;
-  auto* job = new WorkerJob();
-  job->body = [this, work, nextView, network] {
+  // The shared Audiobookshelf worker (AbsWorker): a long-lived task with a PSRAM stack.
+  const bool posted = AbsWorker::post([this, work, nextView, network] {
     std::string failure;
     if (!wifiHeld) {
       if (AbsWifi::acquire(failure)) {
@@ -413,9 +382,8 @@ void AbsActivity::startWork(const char* text, std::function<void(std::string& er
     xSemaphoreGive(dataLock);
     resultReady = true;
     busy = false;
-  };
-  if (!postWork(job)) {
-    delete job;
+  });
+  if (!posted) {
     busy = false;
     error = "Out of memory";
   }

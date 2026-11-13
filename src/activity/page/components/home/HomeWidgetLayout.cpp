@@ -62,7 +62,8 @@ HomeWidgetLayout::HomeWidgetLayout(GfxRenderer& renderer)
       heatmap_(renderer),
       library_(renderer),
       description_(renderer),
-      plugin_(renderer) {}
+      plugin_(renderer),
+      audiobooks_(renderer) {}
 
 void HomeWidgetLayout::render(const HomeTheme::Theme& theme, const int carouselIndex, const int favoriteIndex,
                               const int widgetPageIndex, const int recentGridPageIndex, const int flowIndex) const {
@@ -347,6 +348,11 @@ void HomeWidgetLayout::renderSlot(const HomeTheme::Theme& theme, const int slot,
                         theme.carouselShadowStyles[slot], theme.carouselFullHeight[slot] != 0,
                         isCompactLayout(theme.layout));
       break;
+    case HomeTheme::Widget::Audiobooks:
+      audiobooks_.render(audiobookIndex_, bounds.x, bounds.y, bounds.width, bounds.height,
+                         theme.backgrounds[slot] != 0, theme.carouselStyles[slot], theme.carouselLabels[slot] != 0,
+                         theme.carouselLabelColors[slot], theme.carouselShadowStyles[slot]);
+      break;
     case HomeTheme::Widget::Heatmap:
       heatmap_.render(bounds.x, bounds.y, bounds.width, bounds.height, HomeTheme::HeatmapView::Monthly, false,
                       theme.carouselLabelColors[slot], theme.layout == HomeTheme::Layout::OneByTwo);
@@ -525,6 +531,9 @@ HomeWidgetLayout::HitResult HomeWidgetLayout::hitTest(const HomeTheme::Theme& th
   const int favorite = favoritesAt(theme, favoriteIndex, x, y);
   if (favorite >= 0) return {HitType::Favorites, favorite};
 
+  const int audiobook = audiobooksAt(theme, x, y);
+  if (audiobook >= 0) return {HitType::Audiobooks, audiobook};
+
   const int recent = recentAt(theme, x, y);
   if (recent >= 0) return {HitType::Recent, recent};
 
@@ -603,6 +612,7 @@ HomeWidgetLayout::SwipeTarget HomeWidgetLayout::horizontalSwipeTarget(const Home
     if (x < bounds.x || x >= bounds.x + bounds.width || y < bounds.y || y >= bounds.y + bounds.height) continue;
     if (theme.widgets[slot] == HomeTheme::Widget::Carousel) return SwipeTarget::Carousel;
     if (theme.widgets[slot] == HomeTheme::Widget::Favorites) return SwipeTarget::Favorites;
+    if (theme.widgets[slot] == HomeTheme::Widget::Audiobooks) return SwipeTarget::Audiobooks;
   }
   return SwipeTarget::None;
 }
@@ -610,6 +620,24 @@ HomeWidgetLayout::SwipeTarget HomeWidgetLayout::horizontalSwipeTarget(const Home
 int HomeWidgetLayout::favoriteCount() const { return favorites_.count(); }
 
 const std::string& HomeWidgetLayout::favoritePath(const int index) const { return favorites_.pathAt(index); }
+
+void HomeWidgetLayout::turnAudiobooks(const int direction) const {
+  const int count = audiobooks_.count();
+  if (count > 0) audiobookIndex_ = ((audiobookIndex_ + direction) % count + count) % count;
+}
+
+int HomeWidgetLayout::audiobooksAt(const HomeTheme::Theme& theme, const int x, const int y) const {
+  if (theme.layout == HomeTheme::Layout::Classic) return -1;
+  const Grid layout = grid(theme.layout);
+  for (int slot = 0; slot < HomeTheme::slotCount(theme.layout); ++slot) {
+    if (theme.widgets[slot] != HomeTheme::Widget::Audiobooks) continue;
+    const Bounds bounds = slotBounds(layout, slot);
+    const int hit = audiobooks_.hitTest(audiobookIndex_, x, y, bounds.x, bounds.y, bounds.width, bounds.height,
+                                        theme.carouselStyles[slot], theme.carouselLabels[slot] != 0);
+    if (hit >= 0) return hit;
+  }
+  return -1;
+}
 
 int HomeWidgetLayout::recentAt(const HomeTheme::Theme& theme, const int x, const int y) const {
   if (theme.layout == HomeTheme::Layout::Classic || theme.layout == HomeTheme::Layout::OneByOne) return -1;

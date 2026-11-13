@@ -84,7 +84,7 @@ HomeTheme::Layout layoutAtIndex(const int index) {
 
 bool supportsCarouselSettings(const HomeTheme::Widget widget) {
   return widget == HomeTheme::Widget::Carousel || widget == HomeTheme::Widget::Recent ||
-         widget == HomeTheme::Widget::Favorites;
+         widget == HomeTheme::Widget::Favorites || widget == HomeTheme::Widget::Audiobooks;
 }
 
 bool supportsHeatmapSettings(const HomeTheme::Widget widget) {
@@ -189,6 +189,12 @@ void setDefaultLibraryFolders(char (&folders)[3][128]) {
 // of sleep themes, which are drawn once and would show stale plugin text.
 bool gPluginWidgetOffered = false;
 
+#if INX_HAS_AUDIO_MODULE
+constexpr int kAudioWidgetOptions = 1;  // the Audiobook Carousel
+#else
+constexpr int kAudioWidgetOptions = 0;
+#endif
+
 int widgetOptionCount(const HomeTheme::Layout layout, const bool sleepTheme) {
   if (layout == HomeTheme::Layout::Classic) return 1;
   const int pluginOption = !sleepTheme && gPluginWidgetOffered ? 1 : 0;
@@ -205,7 +211,7 @@ int widgetOptionCount(const HomeTheme::Layout layout, const bool sleepTheme) {
 #else
   const int count = 17;
 #endif
-  return count - (layout == HomeTheme::Layout::OneByOne ? 0 : 3) + pluginOption;
+  return count + kAudioWidgetOptions - (layout == HomeTheme::Layout::OneByOne ? 0 : 3) + pluginOption;
 }
 
 HomeTheme::Widget widgetOptionAt(const HomeTheme::Layout layout, const bool sleepTheme, const int index) {
@@ -238,6 +244,9 @@ HomeTheme::Widget widgetOptionAt(const HomeTheme::Layout layout, const bool slee
     HomeTheme::Widget::Library,
     HomeTheme::Widget::Statistics,
     HomeTheme::Widget::Streaks,
+#if INX_HAS_AUDIO_MODULE
+    HomeTheme::Widget::Audiobooks,
+#endif
   };
   if (layout == HomeTheme::Layout::OneByOne && !sleepTheme) {
     if (index < 0 || index >= static_cast<int>(sizeof(oneByOneOptions) / sizeof(oneByOneOptions[0]))) {
@@ -866,6 +875,9 @@ void ThemePickerActivity::renderWidgetPreview(const HomeTheme::Widget widget, co
     case HomeTheme::Widget::Favorites:
       favorites_.preview(x, y, width, height, background, style, showLabel, labelColor, shadowStyle,
                          carouselFullHeight, isCompactLayout(layout_));
+      break;
+    case HomeTheme::Widget::Audiobooks:
+      audiobooks_.preview(x, y, width, height, background, style, showLabel, labelColor, shadowStyle);
       break;
     case HomeTheme::Widget::Heatmap:
       heatmap_.preview(x, y, width, height, HomeTheme::HeatmapView::Monthly, false, labelColor,

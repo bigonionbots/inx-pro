@@ -28,6 +28,7 @@ extern void onGoToAudiobookshelf();
 extern void onResumeAudiobookshelf(const std::string& itemId);
 extern void onOpenAbsDownloads();
 extern void onGoToAudioModule();
+extern void onGoToListeningStats();
 
 namespace {
 
@@ -112,7 +113,9 @@ std::string formatAddress(const uint8_t* a) {
 
 }  // namespace
 
-void AudioPlayerActivity::onEnter() { showView(AudioPlayer::view().open ? View::NowPlaying : View::Books); }
+void AudioPlayerActivity::onEnter() {
+  showView(AudioPlayer::view().open && !startOnBooks ? View::NowPlaying : View::Books);
+}
 
 void AudioPlayerActivity::onExit() {
   if (scanning) AudioPlayer::btScan(false);
@@ -127,7 +130,7 @@ void AudioPlayerActivity::showView(const View next) {
   view = next;
   if (view == View::Books) {
     books = AudioPlayer::listBooks();
-    recent = AudioPlayer::recentStreams();
+    recent = AudioPlayer::recentAudiobooks();
     if (recent.size() > RECENT_SHOWN) recent.resize(RECENT_SHOWN);
     // Covers once per visit: finding a folder's image reads its directory.
     bookCovers.clear();
@@ -264,6 +267,9 @@ void AudioPlayerActivity::run(const Action action, const int index) {
     case Action::ShowOutput:
       showView(View::Output);
       return;
+    case Action::ShowStats:
+      onGoToListeningStats();
+      return;
     case Action::ShowAudioModule:
       onGoToAudioModule();
       return;
@@ -280,9 +286,14 @@ void AudioPlayerActivity::run(const Action action, const int index) {
     case Action::ShowDownloads:
       onOpenAbsDownloads();
       return;
-    case Action::ResumeStreamed:
+    case Action::ResumeRecent:
       if (index >= 0 && index < static_cast<int>(recent.size())) {
-        onResumeAudiobookshelf(recent[index].itemId);  // fetches it and plays (or plays a download)
+        // On the card: play it here. Else fetch it from Audiobookshelf and stream it.
+        if (AudioPlayer::openRecent(recent[index])) {
+          showView(View::NowPlaying);
+        } else if (!recent[index].itemId.empty()) {
+          onResumeAudiobookshelf(recent[index].itemId);
+        }
         return;
       }
       break;
@@ -597,12 +608,13 @@ void AudioPlayerActivity::renderBooks(int y) {
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
   const int top = y;
 
-  // Audiobookshelf, and its download queue (with how many books are in it).
-  const int half = (inner - GAP) / 2;
-  button(MARGIN, y, half, BUTTON_HEIGHT, "Audiobookshelf", Action::ShowAudiobookshelf);
+  // Audiobookshelf, its download queue (with how many books are in it), and listening stats.
+  const int third = (inner - 2 * GAP) / 3;
+  button(MARGIN, y, third, BUTTON_HEIGHT, "Audiobookshelf", Action::ShowAudiobookshelf);
   const size_t queued = AbsQueue::entries().size();
   const std::string downloads = queued ? "Downloads (" + std::to_string(queued) + ")" : "Downloads";
-  button(MARGIN + half + GAP, y, inner - half - GAP, BUTTON_HEIGHT, downloads.c_str(), Action::ShowDownloads);
+  button(MARGIN + third + GAP, y, third, BUTTON_HEIGHT, downloads.c_str(), Action::ShowDownloads);
+  button(MARGIN + 2 * (third + GAP), y, inner - 2 * (third + GAP), BUTTON_HEIGHT, "Stats", Action::ShowStats);
   y += BUTTON_HEIGHT + 2 * GAP;
 
   const auto label = [&](const char* text) {
@@ -629,14 +641,14 @@ void AudioPlayerActivity::renderBooks(int y) {
   const AudioPlayer::View v = AudioPlayer::view();
 
   if (!recent.empty()) {
-    label("RECENTLY STREAMED");
+    label("RECENT");
     for (size_t i = 0; i < recent.size(); ++i) {
-      const AudioPlayer::RecentStream& r = recent[i];
+      const AudioPlayer::RecentAudiobook& r = recent[i];
       std::string info;
       if (r.durationMs) info = std::to_string(static_cast<int>(100ull * r.positionMs / r.durationMs)) + "%";
       if (!r.author.empty()) info += (info.empty() ? "" : "  -  ") + r.author;
-      bookRow(AbsCovers::path(r.itemId), r.title, info, v.open && v.remote && v.title == r.title,
-              Action::ResumeStreamed, static_cast<int>(i));
+      if (r.path.empty()) info += info.empty() ? "Streams" : "  -  streams";
+      bookRow(r.coverPath, r.title, info, v.open && v.title == r.title, Action::ResumeRecent, static_cast<int>(i));
     }
     y += GAP;
   }

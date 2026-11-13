@@ -35,7 +35,8 @@ enum class Widget : uint8_t {
   VerticalBookshelf = 16,
   Statistics = 17,
   Streaks = 18,
-  Plugin = 19,  ///< 14 in theme files up to version 22 (see HomeTheme.cpp)
+  Plugin = 19,      ///< 14 in theme files up to version 22 (see HomeTheme.cpp)
+  Audiobooks = 20,  ///< recently played audiobooks (t5s3_audio only); 15 in files up to version 22
 };
 
 enum class HeatmapView : uint8_t {

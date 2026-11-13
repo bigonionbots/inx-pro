@@ -27,9 +27,10 @@
  */
 class AudioPlayerActivity final : public Activity {
  public:
+  /** startOnBooks: open on the Audiobooks page even while a book plays (back from its Stats). */
   explicit AudioPlayerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                               const std::function<void()>& onClose)
-      : Activity("AudioPlayer", renderer, mappedInput), onClose(onClose) {}
+                               const std::function<void()>& onClose, const bool startOnBooks = false)
+      : Activity("AudioPlayer", renderer, mappedInput), onClose(onClose), startOnBooks(startOnBooks) {}
 
   void onEnter() override;
   void onExit() override;
@@ -57,9 +58,11 @@ class AudioPlayerActivity final : public Activity {
     ShowBooks,
     ShowOutput,
     ShowAudiobookshelf,
-    ShowAudioModule,  ///< Device Management's Audio module page, back to here
+    ShowAudioModule,
+    ShowStats,  ///< listening stats (ListeningStatsActivity), back to here  ///< Device Management's Audio module page,
+                ///< back to here
     OpenBook,
-    ResumeStreamed,  ///< index = position in `recent`
+    ResumeRecent,  ///< index = position in `recent`
     ShowDownloads,
     BooksPageUp,
     BooksPageDown,
@@ -78,10 +81,11 @@ class AudioPlayerActivity final : public Activity {
   };
 
   const std::function<void()> onClose;
+  const bool startOnBooks;
   View view = View::NowPlaying;
   std::vector<AudioPlayer::Book> books;
-  std::vector<AudioPlayer::RecentStream> recent;  ///< while the Books view is open
-  std::vector<std::string> bookCovers;            ///< per book, "" when none (found once per visit)
+  std::vector<AudioPlayer::RecentAudiobook> recent;  ///< while the Books view is open
+  std::vector<std::string> bookCovers;               ///< per book, "" when none (found once per visit)
   int booksFirst = 0;
   std::vector<AudioChapter> chapterList;  ///< while the Chapters view is open
   int chaptersFirst = 0;

@@ -23,6 +23,7 @@
 #include "activity/page/components/widget/Heatmap.h"
 #include "activity/page/components/widget/Library.h"
 #include "activity/page/components/widget/Description.h"
+#include "activity/page/components/widget/Audiobooks.h"
 #include "activity/page/components/widget/PluginWidget.h"
 #include "activity/page/components/widget/WeeklyStatistics.h"
 #include "activity/page/components/widget/Streaks.h"
@@ -37,6 +38,7 @@ class ThemePickerActivity final : public ActivityWithSubactivity {
         humidity_(renderer), todaysReading_(renderer),
         favorites_(renderer), heatmap_(renderer), library_(renderer), description_(renderer), recentGrid_(renderer),
         flow_(renderer), weeklyStatistics_(renderer), streaks_(renderer), plugin_(renderer),
+        audiobooks_(renderer),
         onBack_(std::move(onBack)), openSleepTheme_(openSleepTheme) {}
 
   void onEnter() override;
@@ -111,6 +113,7 @@ class ThemePickerActivity final : public ActivityWithSubactivity {
   WeeklyStatistics weeklyStatistics_;
   Streaks streaks_;
   PluginWidget plugin_;
+  Audiobooks audiobooks_;
   std::function<void()> onBack_;
 
   void render();

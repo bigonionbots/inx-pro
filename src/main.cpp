@@ -22,6 +22,7 @@
 #include <tuple>
 #include <type_traits>
 
+#include "DeviceRuntime.h"
 #include "activity/network/CalibreConnectActivity.h"
 #include "activity/network/HotspotActivity.h"
 #include "activity/network/LocalNetworkActivity.h"
@@ -33,15 +34,14 @@
 #include "activity/page/Settings.h"
 #include "activity/page/Statistics.h"
 #include "activity/page/SyncActivity.h"
-#include "activity/settings/StoreActivity.h"
-#include "activity/settings/AppsActivity.h"
 #include "activity/reader/ImageViewerActivity.h"
 #include "activity/reader/ReaderActivity.h"
+#include "activity/settings/AppsActivity.h"
+#include "activity/settings/StoreActivity.h"
 #include "activity/system/BootActivity.h"
 #include "activity/system/SleepActivity.h"
 #include "activity/util/FullScreenMessageActivity.h"
 #include "activity/util/KeyboardEntryActivity.h"
-#include "DeviceRuntime.h"
 #include "state/ReaderSetting.h"
 #include "state/SystemSetting.h"
 #if INX_HAS_GAMES
@@ -56,6 +56,7 @@
 #include "activity/settings/AbsActivity.h"
 #include "activity/settings/AudioModuleActivity.h"
 #include "activity/settings/AudioPlayerActivity.h"
+#include "activity/settings/ListeningStatsActivity.h"
 #include "system/AudioLink.h"
 #include "system/AudioModule.h"
 #include "system/AudioPlayer.h"
@@ -63,10 +64,10 @@
 #include "system/FontManager.h"
 #include "system/Fonts.h"
 #include "system/Frontlight.h"
-#include "system/ScreenComponents.h"
 #include "system/GlobalGestureHandler.h"
 #include "system/MappedInputManager.h"
 #include "system/PluginManager.h"
+#include "system/ScreenComponents.h"
 #include "util/LibraryIndexRefresh.h"
 #include "util/StringUtils.h"
 
@@ -88,9 +89,7 @@ bool activityLoopRunning = false;
 std::function<void()> deferredActivitySwitch;
 
 namespace {
-bool isHomeActivity(const Activity* activity) {
-  return activity && std::strcmp(activity->getName(), "Home") == 0;
-}
+bool isHomeActivity(const Activity* activity) { return activity && std::strcmp(activity->getName(), "Home") == 0; }
 
 bool isBookReaderActivity(const Activity* activity) {
   // ReaderActivity owns the EPUB/TXT/PDF/XTC subactivities. Let those
@@ -150,7 +149,7 @@ void logButtonEdges() {
   }
 }
 
-}
+}  // namespace
 
 template <typename T>
 auto storeSwitchArgument(T&& value) {
@@ -290,6 +289,12 @@ void onGoToGames() {
 }
 #endif
 
+/** Audiobook listening stats, from the Audiobooks page; back returns to that page. */
+void onGoToListeningStats() {
+  switchTo<ListeningStatsActivity>(render, input,
+                                   [] { switchTo<AudioPlayerActivity>(render, input, [] { onGoToHome(); }, true); });
+}
+
 /** The Audio module page (Device Management), from the player; back returns to the player. */
 void onGoToAudioModule() {
   switchTo<AudioModuleActivity>(render, input, [] { onGoToAudiobooks(); });
@@ -307,6 +312,17 @@ void onOpenAbsDownloads() {
 /** Opens Audiobookshelf on a recently streamed book and plays it (the Audiobooks page). */
 void onResumeAudiobookshelf(const std::string& itemId) {
   switchTo<AbsActivity>(render, input, [] { onGoToAudiobooks(); }, [] { onGoToAudiobooks(); }, itemId);
+}
+
+/** The Home Audiobook Carousel: plays a recent book from the card, else streams it, in the player. */
+void onPlayRecentAudiobook(const int index) {
+  const std::vector<AudioPlayer::RecentAudiobook> recent = AudioPlayer::recentAudiobooks();
+  if (index < 0 || index >= static_cast<int>(recent.size())) return;
+  if (!AudioPlayer::openRecent(recent[index]) && !recent[index].itemId.empty()) {
+    onResumeAudiobookshelf(recent[index].itemId);  // fetches it (or plays its download) and plays
+    return;
+  }
+  onGoToAudiobooks();  // the now-playing view (or the book list, if it could not open)
 }
 #endif
 
@@ -590,9 +606,9 @@ void loop() {
                                       !isSettingsActivity(currentActivity);
   // The reader owns vertical swipes: swipe-down opens its book settings drawer.
   // Keep servicing an already-open global drawer so its touch controls remain usable.
-  if (globalGestureHandler.handleInput(input, allowGlobalExitGesture, !isBookReaderActivity(currentActivity),
-                                       [] { input.injectButtonEdge(MappedInputManager::Button::Back); },
-                                       [] { onGoToHome(); })) {
+  if (globalGestureHandler.handleInput(
+          input, allowGlobalExitGesture, !isBookReaderActivity(currentActivity),
+          [] { input.injectButtonEdge(MappedInputManager::Button::Back); }, [] { onGoToHome(); })) {
     delay(10);
     return;
   }
