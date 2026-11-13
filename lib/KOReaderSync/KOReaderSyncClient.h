@@ -81,4 +81,9 @@ class KOReaderSyncClient {
 
   /** HTTP status code from the last request, for diagnostics. */
   static int lastHttpCode;
+  /** Internal RAM when the last LOW_MEMORY was reported (bytes): the largest free block, and in total. */
+  static size_t lowMemoryBlock;
+  static size_t lowMemoryFree;
+  /** errorString(), with the memory figures for LOW_MEMORY. */
+  static std::string describe(Error error);
 };
