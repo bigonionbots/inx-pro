@@ -127,6 +127,7 @@ class LocalNetworkActivity final : public ActivityWithSubactivity {
   LocalNetworkState state;          /**< Current activity state */
   bool wifiSelectionResultPending = false;
   bool wifiSelectionConnected = false;
+  bool wifiStartedHere_ = false;  ///< the Wi-Fi picker connected: off again on exit
   bool holdsAbsWifi = false;  ///< counted as a user of on-demand Wi-Fi (audio module builds)
   bool resumeAudio = false;   ///< a book was playing on entering: play it again on leaving
 

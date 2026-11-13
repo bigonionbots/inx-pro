@@ -27,6 +27,7 @@ class DictionaryManagerActivity final : public ActivityWithSubactivity {
   bool preventAutoSleep() override { return state_ == State::Downloading; }
 
  private:
+  bool wifiStartedHere_ = false;  ///< this screen's Wi-Fi picker connected: off again on exit
   enum class State : uint8_t { Ready, Downloading, Failed };
 
   static constexpr int kRowHeight = SettingsListLayout::kRowHeight;

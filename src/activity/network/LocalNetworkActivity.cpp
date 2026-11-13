@@ -14,6 +14,7 @@
 
 #include "WifiSelectionActivity.h"
 #include "activity/page/SubPage.h"
+#include "network/ScreenWifi.h"
 #if INX_HAS_AUDIO_MODULE
 #include "abs/AbsWifi.h"
 #include "system/AudioPlayer.h"
@@ -101,6 +102,7 @@ void LocalNetworkActivity::onEnter() {
 #endif
   state = online ? LocalNetworkState::SERVER_STARTING : LocalNetworkState::WIFI_SELECTION;
   if (!online) {
+    wifiStartedHere_ = true;  // Wi-Fi was down: off again on exit, connected or not
     enterNewActivity(new WifiSelectionActivity(
         renderer, mappedInput, [this](bool connected) { onWifiSelectionComplete(connected); }, "File Transfer",
         "Wifi"));
@@ -149,6 +151,7 @@ void LocalNetworkActivity::onExit() {
 #if INX_HAS_AUDIO_MODULE
   // Play on if it was playing; the player keeps our Wi-Fi hold until the stream has its own.
   // Otherwise Wi-Fi goes off only if on-demand Wi-Fi turned it on and nothing else uses it.
+  const bool heldAbsWifi = holdsAbsWifi;
   AudioPlayer::resumeAfterScreen(resumeAudio, holdsAbsWifi);
   holdsAbsWifi = false;
   resumeAudio = false;
@@ -175,6 +178,13 @@ void LocalNetworkActivity::onExit() {
   stopWebServer();
   MDNS.end();
   ActivityWithSubactivity::onExit();
+#if INX_HAS_AUDIO_MODULE
+  // Connected: the Wi-Fi hold released above (resumeAfterScreen) turns Wi-Fi off unless a resumed
+  // stream takes it over. Picker cancelled or failed: no hold was taken, so turn it off here.
+  if (wifiStartedHere_ && !heldAbsWifi) ScreenWifi::off();
+#else
+  if (wifiStartedHere_) ScreenWifi::off();
+#endif
 }
 
 /**
@@ -241,6 +251,9 @@ void LocalNetworkActivity::loop() {
       }
 
       connectedIP = static_cast<WifiSelectionActivity*>(subActivity.get())->getConnectedIP();
+#if INX_HAS_AUDIO_MODULE
+      AbsWifi::adopt();  // our Wi-Fi hold's release turns it off again (on exit)
+#endif
       INX_SERIAL.printf("[%lu] [LOCALNET] Connected to %s, IP: %s\n", millis(), WiFi.SSID().c_str(),
                         connectedIP.c_str());
       onConnected();

@@ -11,6 +11,7 @@
 
 #include "activity/page/SubPage.h"
 #include "activity/network/WifiSelectionActivity.h"
+#include "network/ScreenWifi.h"
 #include "activity/page/components/global/Button.h"
 #include "activity/page/components/global/Paginator.h"
 #include "activity/page/components/widget/BaseCarousel.h"
@@ -223,6 +224,7 @@ void FontManagerActivity::onExit() {
   if (fontCatalogNeedsRescan_) {
     rescanFontCatalogPreservingSettings();
   }
+  if (wifiStartedHere_) ScreenWifi::off();
 }
 
 void FontManagerActivity::loadPackages() {
@@ -556,6 +558,7 @@ void FontManagerActivity::updateDisplay() {
 }
 
 void FontManagerActivity::launchWifiSelection() {
+  wifiStartedHere_ = true;  // Wi-Fi was down: off again on exit, connected or not
   enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
                                              [this](const bool connected) { onWifiSelectionComplete(connected); },
                                              "Download", "Fonts"));

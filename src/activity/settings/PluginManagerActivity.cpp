@@ -9,6 +9,7 @@
 #include <cstdio>
 
 #include "activity/network/WifiSelectionActivity.h"
+#include "network/ScreenWifi.h"
 #include "activity/page/SubPage.h"
 #include "activity/page/components/global/Button.h"
 #include "DownloadTransferUi.h"
@@ -66,6 +67,7 @@ void PluginManagerActivity::onExit() {
     vSemaphoreDelete(renderingMutex_);
     renderingMutex_ = nullptr;
   }
+  if (wifiStartedHere_) ScreenWifi::off();
 }
 
 void PluginManagerActivity::loadPackages() {
@@ -136,6 +138,7 @@ void PluginManagerActivity::startInstallation() {
 }
 
 void PluginManagerActivity::launchWifiSelection() {
+  wifiStartedHere_ = true;  // Wi-Fi was down: off again on exit, connected or not
   enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
                                              [this](const bool connected) { onWifiSelectionComplete(connected); },
                                              "Download", "Plugins"));

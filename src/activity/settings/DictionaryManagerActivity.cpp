@@ -8,6 +8,7 @@
 #include <cstdio>
 
 #include "activity/network/WifiSelectionActivity.h"
+#include "network/ScreenWifi.h"
 #include "activity/page/SubPage.h"
 #include "DownloadTransferUi.h"
 #include "images/Download.h"
@@ -76,6 +77,7 @@ void DictionaryManagerActivity::onExit() {
     vSemaphoreDelete(renderingMutex_);
     renderingMutex_ = nullptr;
   }
+  if (wifiStartedHere_) ScreenWifi::off();
 }
 
 void DictionaryManagerActivity::loadPackages() {
@@ -198,6 +200,7 @@ void DictionaryManagerActivity::updateDisplay() {
 }
 
 void DictionaryManagerActivity::launchWifiSelection() {
+  wifiStartedHere_ = true;  // Wi-Fi was down: off again on exit, connected or not
   enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
                                              [this](const bool connected) { onWifiSelectionComplete(connected); },
                                              "Download", "Dictionaries"));

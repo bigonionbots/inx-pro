@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "activity/network/WifiSelectionActivity.h"
+#include "network/ScreenWifi.h"
 #include "activity/page/SubPage.h"
 #include "activity/page/components/global/Button.h"
 #include "activity/page/components/global/Toggle.h"
@@ -113,6 +114,7 @@ void LanguageManagerActivity::onExit() {
     vSemaphoreDelete(renderingMutex_);
     renderingMutex_ = nullptr;
   }
+  if (wifiStartedHere_) ScreenWifi::off();
 }
 
 void LanguageManagerActivity::loadPackages() {
@@ -286,6 +288,7 @@ void LanguageManagerActivity::updateDisplay() {
 }
 
 void LanguageManagerActivity::launchWifiSelection() {
+  wifiStartedHere_ = true;  // Wi-Fi was down: off again on exit, connected or not
   enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
                                              [this](const bool connected) { onWifiSelectionComplete(connected); }));
 }

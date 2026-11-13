@@ -27,6 +27,7 @@ class FontManagerActivity final : public ActivityWithSubactivity {
   bool preventAutoSleep() override { return state_ == State::Downloading; }
 
  private:
+  bool wifiStartedHere_ = false;  ///< this screen's Wi-Fi picker connected: off again on exit
   enum class State : uint8_t { Ready, Downloading, Failed };
   enum class CategoryFilter : uint8_t { All, SansSerif, Serif };
 
