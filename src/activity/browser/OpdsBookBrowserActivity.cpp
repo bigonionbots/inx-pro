@@ -433,12 +433,14 @@ void OpdsBookBrowserActivity::leave() {
     onGoToHome();
     return;
   }
-  // New books on the card: add them to the library index, and to the Authors/Series/... indexes the
-  // Metadata task built, before going (that used to take a manual refresh and the Metadata task).
+  // New books on the card: add them to the library index and to the Authors/Series/... indexes the
+  // Metadata task built, and make their thumbnails, before going (that used to take a manual refresh
+  // and the Metadata task).
   INX_SERIAL.printf("[%lu] [OPDS] %d book(s) downloaded: updating the library\n", millis(), downloadedBooks);
   downloadedBooks = 0;
   leaveAfterUpdate = true;
-  LibraryIndexRefresh::start(renderer, this, "Updating library", true);
+  LibraryIndexRefresh::start(renderer, this, "Updating library",
+                             LibraryIndexRefresh::EXTRA_METADATA | LibraryIndexRefresh::EXTRA_THUMBNAILS);
 }
 
 void OpdsBookBrowserActivity::navigateBack() {
@@ -486,9 +488,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   if (result == HttpDownloader::OK) {
     INX_SERIAL.printf("[%lu] [OPDS] Download complete: %s\n", millis(), filename.c_str());
 
-    // A book downloaded again must not open with the old copy's cached layout (the cache lives
-    // under /.metadata, as for web uploads).
-    Epub epub(filename, "/.metadata");
+    Epub epub(filename, "/.system");
     epub.clearCache();
     INX_SERIAL.printf("[%lu] [OPDS] Cleared cache for: %s\n", millis(), filename.c_str());
     ++downloadedBooks;
