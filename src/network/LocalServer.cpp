@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <new>
 
 #include "../state/ReaderSetting.h"
 #include "../state/SystemSetting.h"
@@ -68,8 +69,35 @@ extern GfxRenderer& render;
 
 namespace {
 
+// WebServer retains parsed request arguments until the next request. Large
+// JSON bodies therefore stay allocated between requests and can fragment the
+// ESP32 heap during a long Wi-Fi session.
+class LocalHttpServer final : public WebServer {
+ public:
+  explicit LocalHttpServer(const uint16_t port) : WebServer(port) {}
+
+  void releaseRequestArguments() {
+    if (_currentArgs) {
+      delete[] _currentArgs;
+      _currentArgs = nullptr;
+    }
+    _currentArgCount = 0;
+
+    if (_postArgs) {
+      delete[] _postArgs;
+      _postArgs = nullptr;
+    }
+    _postArgsLen = 0;
+  }
+};
+
+void releaseRequestArguments(WebServer* server) {
+  static_cast<LocalHttpServer*>(server)->releaseRequestArguments();
+}
+
 const char* HIDDEN_ITEMS[] = {"System Volume Information", ".metadata"};
 constexpr size_t HIDDEN_ITEMS_COUNT = sizeof(HIDDEN_ITEMS) / sizeof(HIDDEN_ITEMS[0]);
+constexpr size_t MAX_PLUGIN_WEB_ASSET_BYTES = 512 * 1024;
 constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;
 constexpr const char* DEVICE_IDENTITY_DIR = "/.system/identity";
@@ -210,7 +238,7 @@ body{background:var(--inx-page)!important;color:var(--inx-ink)!important;font-fa
   } else if (page.indexOf("Inx — Fonts") >= 0 || page.indexOf("Inx - Fonts") >= 0) {
     label = "Fonts";
     active = "/font-manager";
-  } else if (page.indexOf("Inx — Language Manager") >= 0 || page.indexOf("Inx - Language Manager") >= 0) {
+  } else if (page.indexOf("Inx — Language") >= 0 || page.indexOf("Inx - Language") >= 0) {
     label = "Language";
     active = "/language-manager";
   } else if (page.indexOf("Inx — Settings") >= 0 || page.indexOf("Inx - Settings") >= 0) {
@@ -624,9 +652,10 @@ void LocalServer::begin() {
   INX_SERIAL.printf("[%lu] [WEB] Network mode: %s\n", millis(), apMode ? "AP" : "STA");
 
   INX_SERIAL.printf("[%lu] [WEB] Creating web server on port %d...\n", millis(), port);
-  server.reset(new WebServer(port));
+  server.reset(new (std::nothrow) LocalHttpServer(port));
 
   WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
 
   if (!server) {
     INX_SERIAL.printf("[%lu] [WEB] Failed to create WebServer!\n", millis());
@@ -717,7 +746,14 @@ void LocalServer::begin() {
   server->begin();
 
   INX_SERIAL.printf("[%lu] [WEB] Starting WebSocket server on port %d...\n", millis(), wsPort);
-  wsServer.reset(new WebSocketsServer(wsPort));
+  auto* websocketServer = new (std::nothrow) WebSocketsServer(wsPort);
+  if (!websocketServer) {
+    INX_SERIAL.printf("[%lu] [WEB] Failed to create WebSocket server\n", millis());
+    server->stop();
+    server.reset();
+    return;
+  }
+  wsServer.reset(websocketServer);
   wsInstance = const_cast<LocalServer*>(this);
   wsServer->begin();
   wsServer->onEvent(wsEventCallback);
@@ -737,7 +773,7 @@ void LocalServer::begin() {
 }
 
 void LocalServer::stop() {
-  if (!running || !server) {
+  if (!running && !server && !wsServer && !udpActive) {
     INX_SERIAL.printf("[%lu] [WEB] stop() called but already stopped (running=%d, server=%p)\n", millis(), running,
                       server.get());
     return;
@@ -745,6 +781,12 @@ void LocalServer::stop() {
 
   INX_SERIAL.printf("[%lu] [WEB] STOP INITIATED - setting running=false first\n", millis());
   running = false;
+
+  // Prevent a close() callback from entering this object while its server is
+  // being torn down.
+  if (wsInstance == this) {
+    wsInstance = nullptr;
+  }
 
   if (wsUploadInProgress && wsUploadFile) {
     wsUploadFile.close();
@@ -755,7 +797,6 @@ void LocalServer::stop() {
     INX_SERIAL.printf("[%lu] [WEB] Stopping WebSocket server...\n", millis());
     wsServer->close();
     wsServer.reset();
-    wsInstance = nullptr;
     INX_SERIAL.printf("[%lu] [WEB] WebSocket server stopped\n", millis());
   }
 
@@ -766,7 +807,9 @@ void LocalServer::stop() {
 
   delay(20);
 
-  server->stop();
+  if (server) {
+    server->stop();
+  }
 
   delay(10);
 
@@ -792,6 +835,7 @@ void LocalServer::handleClient() {
   }
 
   server->handleClient();
+  releaseRequestArguments(server.get());
 
   if (wsServer) {
     wsServer->loop();
@@ -1170,6 +1214,7 @@ void LocalServer::handlePluginPage() const {
     server->send(404, "text/plain", error.c_str());
     return;
   }
+  server->sendHeader("Cache-Control", "no-store");
   server->send(200, "text/html; charset=utf-8", addLanguageManagerNavLink(html.c_str(), server->uri().c_str()));
 }
 
@@ -1212,10 +1257,11 @@ void LocalServer::handlePluginPageJs() const {
   }
   std::string script;
   std::string error;
-  if (!PluginManager::readFile(plugin.id.c_str(), plugin.script.c_str(), script, 32 * 1024, error)) {
+  if (!PluginManager::readFile(plugin.id.c_str(), plugin.script.c_str(), script, 256 * 1024, error)) {
     server->send(404, "text/plain", error.c_str());
     return;
   }
+  server->sendHeader("Cache-Control", "no-store");
   server->send(200, "text/javascript; charset=utf-8", script.c_str());
 }
 
@@ -1240,10 +1286,15 @@ void LocalServer::handlePluginAsset() const {
   bool allowed = false;
   if (PluginManager::listWebPlugins(links)) {
     for (const PluginManager::WebLink& link : links) {
-      if (pluginId == link.id.c_str() && filename == link.icon.c_str()) {
-        allowed = true;
-        break;
+      if (pluginId != link.id.c_str()) continue;
+      if (filename == link.icon.c_str() && !link.icon.empty()) allowed = true;
+      for (const std::string& asset : link.assets) {
+        if (filename == asset.c_str()) {
+          allowed = true;
+          break;
+        }
       }
+      if (allowed) break;
     }
   }
   if (!allowed) {
@@ -1253,7 +1304,7 @@ void LocalServer::handlePluginAsset() const {
 
   std::string contents;
   std::string error;
-  if (!PluginManager::readFile(pluginId.c_str(), filename.c_str(), contents, 64 * 1024, error)) {
+  if (!PluginManager::readFile(pluginId.c_str(), filename.c_str(), contents, MAX_PLUGIN_WEB_ASSET_BYTES, error)) {
     server->send(404, "text/plain", error.c_str());
     return;
   }
@@ -2210,13 +2261,12 @@ void LocalServer::handleSettingsPage() const {
 void LocalServer::handleSettingsGet() const {
   JsonDocument doc;
   const bool clockAvailable = clockSettingsAvailable();
-  const uint8_t sleepScreen = (!clockAvailable && SETTINGS.sleepScreen == SystemSetting::DATETIME)
-                                  ? SystemSetting::LIGHT
-                                  : SETTINGS.sleepScreen;
+  const uint8_t sleepScreen = SETTINGS.sleepScreen == SystemSetting::DATETIME_LEGACY ? SystemSetting::WIDGET
+                                                                                : SETTINGS.sleepScreen;
 
   doc["clockAvailable"] = clockAvailable;
   doc["flickPageTurnAvailable"] =
-#if FREEINK_DEVICE_STICKY
+#if FREEINK_DEVICE_STICKY || FREEINK_DEVICE_PICCO
       true;
 #else
       false;
@@ -2232,6 +2282,14 @@ void LocalServer::handleSettingsGet() const {
   }
   doc["hideBatteryPercentage"] = SETTINGS.hideBatteryPercentage;
   doc["keyboardLayout"] = SETTINGS.keyboardLayout;
+  doc["systemFontFamily"] = SETTINGS.systemFontFamily;
+  JsonArray systemFontFamilies = doc["systemFontFamilyOptions"].to<JsonArray>();
+  const std::vector<std::string> systemFontLabels = FontManager::readerFontFamilyEnumLabels();
+  for (size_t i = 0; i < systemFontLabels.size(); ++i) {
+    JsonObject option = systemFontFamilies.add<JsonObject>();
+    option["value"] = static_cast<uint8_t>(i);
+    option["label"] = systemFontLabels[i];
+  }
   doc["systemTextSize"] = SETTINGS.systemTextSize;
   doc["hideThumbnailTitles"] = SETTINGS.hideThumbnailTitles;
   doc["thumbnailSize"] = SETTINGS.thumbnailSize;
@@ -2383,7 +2441,8 @@ void LocalServer::handleSettingsUpdate() const {
 
     if (strcmp(key, "sleepScreen") == 0) {
       uint8_t v = static_cast<uint8_t>(value);
-      if (v >= SystemSetting::SLEEP_SCREEN_MODE_COUNT || (!clockAvailable && v == SystemSetting::DATETIME)) {
+      if (v == SystemSetting::DATETIME_LEGACY) v = SystemSetting::WIDGET;
+      if (v >= SystemSetting::SLEEP_SCREEN_MODE_COUNT) {
         v = SystemSetting::LIGHT;
       }
       SETTINGS.sleepScreen = v;
@@ -2429,6 +2488,13 @@ void LocalServer::handleSettingsUpdate() const {
       const int v = static_cast<int>(value);
       SETTINGS.keyboardLayout = (v >= 0 && v < SystemSetting::KEYBOARD_LAYOUT_COUNT) ? static_cast<uint8_t>(v)
                                                                                      : SystemSetting::KEYBOARD_QWERTY;
+      changed = true;
+    } else if (strcmp(key, "systemFontFamily") == 0) {
+      const int v = static_cast<int>(value);
+      const uint32_t optionCount = FontManager::readerFontFamilyOptionCount();
+      SETTINGS.systemFontFamily = (v >= 0 && static_cast<uint32_t>(v) < optionCount)
+                                      ? static_cast<uint8_t>(v)
+                                      : SystemSetting::MONTSERRAT;
       changed = true;
     } else if (strcmp(key, "systemTextSize") == 0) {
       const int v = static_cast<int>(value);

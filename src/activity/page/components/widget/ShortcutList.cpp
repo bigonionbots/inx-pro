@@ -17,6 +17,7 @@
 #include "images/HighlightIcon.h"
 #include "images/StatisticsIcon.h"
 #include "system/Fonts.h"
+#include "state/SystemSetting.h"
 
 namespace {
 
@@ -48,6 +49,14 @@ int rowHeight(const int height, const int lineHeight) {
                   (height - kTopPadding - kInnerPadding - kRowGap * (kItemCount - 1)) / kItemCount);
 }
 
+int visibleItemCount() {
+  return SETTINGS.disableStatistics != 0 ? kItemCount - 1 : kItemCount;
+}
+
+const ShortcutItem& visibleItem(const int index) {
+  return kItems[(SETTINGS.disableStatistics != 0 && index >= 3) ? index + 1 : index];
+}
+
 }
 
 void ShortcutList::render(const int x, const int y, const int width, const int height,
@@ -55,14 +64,15 @@ void ShortcutList::render(const int x, const int y, const int width, const int h
   const int font = systemFontId();
   const int lineHeight = renderer_.text.getLineHeight(font);
   const int row = rowHeightOverride > 0 ? rowHeightOverride : rowHeight(height, lineHeight);
-  for (int i = 0; i < kItemCount; ++i) {
+  for (int i = 0; i < visibleItemCount(); ++i) {
+    const ShortcutItem& item = visibleItem(i);
     const int rowX = x + kInnerPadding;
     const int rowY = y + kTopPadding + i * (row + kRowGap);
     const int iconX = rowX + 8;
     const int iconY = rowY + (row - kIconSize) / 2;
-    renderer_.bitmap.icon(kItems[i].icon, iconX, iconY, kIconSize, kIconSize);
+    renderer_.bitmap.icon(item.icon, iconX, iconY, kIconSize, kIconSize);
     renderer_.text.render(font, iconX + kIconSize + 16,
-                          rowY + (row - lineHeight) / 2, kItems[i].label, true);
+                          rowY + (row - lineHeight) / 2, item.label, true);
   }
 }
 
@@ -77,7 +87,7 @@ int ShortcutList::hitTest(const int tapX, const int tapY, const int areaX, const
   if (tapX < contentX || tapX >= contentRight || tapY < contentTop || tapY >= contentBottom) return -1;
 
   const int index = (tapY - contentTop) / (row + kRowGap);
-  if (index < 0 || index >= kItemCount) return -1;
+  if (index < 0 || index >= visibleItemCount()) return -1;
   const int rowY = contentTop + index * (row + kRowGap);
   if (tapY >= rowY + row) return -1;
   return index;

@@ -45,7 +45,8 @@ void clearFrame() {
 
 }  // namespace
 
-void LibraryIndexRefresh::start(GfxRenderer& renderer, Activity* currentScreen, const bool withMetadata) {
+void LibraryIndexRefresh::start(GfxRenderer& renderer, Activity* currentScreen, const char* message,
+                                const bool withMetadata) {
   if (running || popup) return;
   rebuildMetadata = withMetadata;
 
@@ -56,7 +57,7 @@ void LibraryIndexRefresh::start(GfxRenderer& renderer, Activity* currentScreen, 
     memcpy(frame, renderer.getFrameBuffer(), frameSize);
   }
 
-  layout = ScreenComponents::LoadingProgress::show(renderer, "Updating", 0);
+  layout = ScreenComponents::LoadingProgress::show(renderer, message ? message : "Updating", 0);
   displayedProgress = 0;
   running = true;
   popup = true;
