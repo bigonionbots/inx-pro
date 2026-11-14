@@ -49,7 +49,11 @@ constexpr int ROW_COVER_INSET = 6;
 constexpr int DETAIL_COVER = 180;
 /** While covers arrive, redraw at most this often (each redraw is a panel refresh). */
 constexpr unsigned long COVER_REDRAW_MS = 2000;
-constexpr unsigned long DOWNLOAD_REDRAW_MS = 3000;
+/**
+ * A redraw blocks the main loop for about a second on the T5, and the downloader writes the card
+ * only from the main loop: every 3 s took a third of its writing time while this page was open.
+ */
+constexpr unsigned long DOWNLOAD_REDRAW_MS = 10000;
 constexpr uint32_t WORKER_STACK = 12288;  // TLS
 /** The index is fetched again (in the background) at most this often, unless asked to. */
 constexpr unsigned long INDEX_REFRESH_MS = 10 * 60 * 1000;

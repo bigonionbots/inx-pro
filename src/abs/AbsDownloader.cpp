@@ -9,9 +9,11 @@
 
 #include <Arduino.h>
 #include <SDCardManager.h>
+#include <WiFi.h>
 #include <esp_crt_bundle.h>
 #include <esp_heap_caps.h>
 #include <esp_http_client.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/idf_additions.h>
 #include <freertos/queue.h>
@@ -26,20 +28,41 @@
 #include "AbsClient.h"
 #include "AbsLocal.h"
 #include "AbsWifi.h"
+#include "system/AudioModule.h"
 #include "util/SdIoMutex.h"
 
 namespace AbsDownloader {
 
 namespace {
 
-constexpr size_t CHUNK_BYTES = 64 * 1024;
-constexpr int SLOTS = 3;
-constexpr int WRITES_PER_SERVICE = 2;
+/**
+ * The card is written on the main loop only, which stalls for 1-2 s now and then (screen
+ * refreshes). With 3 x 64 KB of buffers (under half a second of network data) every stall stopped
+ * the download, and network and card took turns: ~300 KB/s where either alone managed ~450-500.
+ * 1.5 MB of PSRAM rides out a 2-3 s stall; held only while a download runs.
+ */
+constexpr size_t CHUNK_BYTES = 128 * 1024;
+constexpr int SLOTS = 12;
+/**
+ * Card writes per service() call stop after this long (at least one), so the loop stays responsive;
+ * longer while the buffers are at least half full, when the card is what holds the download back.
+ */
+constexpr uint32_t WRITE_BUDGET_US = 200 * 1000;
+constexpr uint32_t BACKLOG_WRITE_BUDGET_US = 600 * 1000;
 constexpr uint32_t SPEED_WINDOW_MS = 3000;
 constexpr int HTTP_TIMEOUT_MS = 15000;
 /** Reconnects in a row without getting any data, before the download stops with the error. */
 constexpr int MAX_RECONNECTS = 5;
 constexpr uint32_t FIRST_RETRY_DELAY_MS = 1000;
+
+/**
+ * Speed diagnostics: every STATS_WINDOW_MS the module log gets one "DL" line saying where the time
+ * went (network reads, waiting for a free buffer, SD writes, gaps between service() calls). Wi-Fi
+ * modem sleep made no measurable difference (tried alternating it), so it stays at the default.
+ * Measured on the T5 (LAN, plain HTTP or HTTPS alike): the network gives 140-550 KB/s and the card
+ * takes ~410 KB/s, so ~320 KB/s overall. Every 30 s keeps the module log readable.
+ */
+constexpr uint32_t STATS_WINDOW_MS = 30000;
 
 struct Slot {
   int track = 0;
@@ -64,6 +87,51 @@ FsFile file;                    // main loop: the track being written
 int fileTrack = -1;
 uint32_t speedStartMs = 0;
 uint64_t speedStartBytes = 0;
+
+// Diagnostics (see STATS_WINDOW_MS). The task adds, the main loop takes and resets each window.
+std::atomic<uint32_t> statNetUs{0};       // in stream.read()
+std::atomic<uint32_t> statNetBytes{0};    // bytes those reads returned
+std::atomic<uint32_t> statSlotWaitUs{0};  // waiting for a free buffer (the card is behind)
+// Main loop only.
+uint32_t statWindowStartMs = 0;
+uint64_t statWindowStartBytes = 0;
+uint32_t statSdUs = 0;
+uint32_t statSdBytes = 0;
+uint32_t statMaxGapMs = 0;
+uint32_t statMaxBacklog = 0;
+uint32_t lastServiceMs = 0;
+
+uint32_t elapsedUs(const int64_t sinceUs) { return static_cast<uint32_t>(esp_timer_get_time() - sinceUs); }
+
+/** Tenths of a second, for "x.y s" out of microseconds. */
+unsigned tenths(const uint32_t us) { return static_cast<unsigned>((us + 50000) / 100000); }
+
+unsigned kbPerSecond(const uint64_t bytes, const uint64_t us) {
+  return us ? static_cast<unsigned>(bytes * 1000000 / us / 1024) : 0;
+}
+
+/** Main loop: one line for the window just ended. */
+void logWindow(const uint64_t doneBytes) {
+  const uint32_t now = millis();
+  const uint32_t windowMs = now - statWindowStartMs;
+  const uint32_t netUs = statNetUs.exchange(0);
+  const uint32_t netBytes = statNetBytes.exchange(0);
+  const uint32_t waitUs = statSlotWaitUs.exchange(0);
+  const uint64_t written = doneBytes - statWindowStartBytes;
+  AudioModule::logf(
+      "DL %us: %u KB/s | net %u.%us busy (%u KB/s reading), buffer wait %u.%us | SD %u.%us busy (%u KB/s), "
+      "loop gap max %u ms, backlog max %u/%d",
+      static_cast<unsigned>((windowMs + 500) / 1000), kbPerSecond(written, static_cast<uint64_t>(windowMs) * 1000),
+      tenths(netUs) / 10, tenths(netUs) % 10, kbPerSecond(netBytes, netUs), tenths(waitUs) / 10, tenths(waitUs) % 10,
+      tenths(statSdUs) / 10, tenths(statSdUs) % 10, kbPerSecond(statSdBytes, statSdUs),
+      static_cast<unsigned>(statMaxGapMs), static_cast<unsigned>(statMaxBacklog), SLOTS);
+  statWindowStartMs = now;
+  statWindowStartBytes = doneBytes;
+  statSdUs = 0;
+  statSdBytes = 0;
+  statMaxGapMs = 0;
+  statMaxBacklog = 0;
+}
 
 void setError(const std::string& error) {
   xSemaphoreTake(lock, portMAX_DELAY);
@@ -186,14 +254,25 @@ void downloadTrack(const size_t i, std::string& error) {
     TrackStream stream;
     bool fatal = false;
     std::string failure;
-    if (stream.open(url, offset, failure, fatal)) {
+    const int64_t openStartUs = esp_timer_get_time();
+    const bool opened = stream.open(url, offset, failure, fatal);
+    AudioModule::logf("DL: track %u at %llu %s in %u ms", static_cast<unsigned>(i),
+                      static_cast<unsigned long long>(offset), opened ? "opened" : "failed to open",
+                      static_cast<unsigned>(elapsedUs(openStartUs) / 1000));
+    if (opened) {
       while (offset < t.sizeBytes && !stopRequested) {
         int slotIndex;
-        if (xQueueReceive(freeSlots, &slotIndex, pdMS_TO_TICKS(200)) != pdTRUE) continue;
+        const int64_t waitStartUs = esp_timer_get_time();
+        const bool gotSlot = xQueueReceive(freeSlots, &slotIndex, pdMS_TO_TICKS(200)) == pdTRUE;
+        statSlotWaitUs += elapsedUs(waitStartUs);
+        if (!gotSlot) continue;
         Slot& slot = slots[slotIndex];
         const uint64_t left = t.sizeBytes - offset;
         const size_t want = left < CHUNK_BYTES ? static_cast<size_t>(left) : CHUNK_BYTES;
+        const int64_t readStartUs = esp_timer_get_time();
         const size_t n = stream.read(slot.data, want);
+        statNetUs += elapsedUs(readStartUs);
+        statNetBytes += static_cast<uint32_t>(n);
         if (n == 0) {
           xQueueSend(freeSlots, &slotIndex, 0);
           failure = "connection dropped";
@@ -228,6 +307,7 @@ void runDownload() {
   std::string error;
   {
     AbsWifi::Use wifi(error);
+    if (wifi.ok()) AudioModule::logf("DL: Wi-Fi %d dBm", WiFi.RSSI());
     for (size_t i = 0; wifi.ok() && i < meta.tracks.size() && !stopRequested && error.empty(); ++i) {
       if (startAt[i] < meta.tracks[i].sizeBytes) downloadTrack(i, error);
     }
@@ -268,6 +348,24 @@ bool writeSlot(const Slot& slot) {
   return file.write(slot.data, slot.length) == slot.length;
 }
 
+/** The buffers, in PSRAM, while a download runs (start() and service()). Main loop. */
+bool allocateSlots() {
+  for (Slot& slot : slots) {
+    if (!slot.data)
+      slot.data = static_cast<uint8_t*>(heap_caps_malloc(CHUNK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!slot.data) return false;
+  }
+  return true;
+}
+
+/** Only once the task is idle and every filled buffer is on the card. Main loop. */
+void freeSlotBuffers() {
+  for (Slot& slot : slots) {
+    heap_caps_free(slot.data);
+    slot.data = nullptr;
+  }
+}
+
 /** Free memory, for an error that says why something could not be allocated. */
 std::string memoryNote() {
   char text[96];
@@ -285,11 +383,6 @@ bool begin(std::string& error) {
   if (!freeSlots) freeSlots = xQueueCreate(SLOTS, sizeof(int));
   if (!filledSlots) filledSlots = xQueueCreate(SLOTS, sizeof(int));
   bool ok = lock && freeSlots && filledSlots;
-  for (Slot& slot : slots) {
-    if (!slot.data)
-      slot.data = static_cast<uint8_t*>(heap_caps_malloc(CHUNK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    ok = ok && slot.data;
-  }
   // The task's stack is in PSRAM, but its control block must be internal RAM, which a long
   // session (streaming, the module link, TLS) can leave without even that: create it at boot.
   if (ok && !task &&
@@ -310,6 +403,12 @@ bool start(const Abs::ItemDetail& item, std::string& error) {
   for (int i = 0; i < 100 && taskRunning && stopRequested; ++i) vTaskDelay(pdMS_TO_TICKS(50));
   if (taskRunning) return true;
   if (!begin(error)) return false;  // normally done at boot (AbsQueue::begin())
+  if (!allocateSlots()) {
+    freeSlotBuffers();
+    error = "Cannot start the download: out of memory (" + memoryNote() + ")";
+    INX_SERIAL.printf("[ABSDL] %s\n", error.c_str());
+    return false;
+  }
   xQueueReset(freeSlots);
   xQueueReset(filledSlots);
   for (int i = 0; i < SLOTS; ++i) xQueueSend(freeSlots, &i, 0);
@@ -359,6 +458,16 @@ bool start(const Abs::ItemDetail& item, std::string& error) {
   xSemaphoreGive(lock);
   speedStartMs = millis();
   speedStartBytes = fresh.doneBytes;
+  statNetUs = 0;
+  statNetBytes = 0;
+  statSlotWaitUs = 0;
+  statWindowStartMs = millis();
+  statWindowStartBytes = fresh.doneBytes;
+  statSdUs = 0;
+  statSdBytes = 0;
+  statMaxGapMs = 0;
+  statMaxBacklog = 0;
+  lastServiceMs = 0;
 
   stopRequested = false;
   taskFinished = false;
@@ -382,11 +491,24 @@ void pause() {
 
 void service() {
   if (!lock) return;
-  for (int i = 0; i < WRITES_PER_SERVICE; ++i) {
+  if (taskRunning) {
+    const uint32_t now = millis();
+    if (lastServiceMs && now - lastServiceMs > statMaxGapMs) statMaxGapMs = now - lastServiceMs;
+    lastServiceMs = now;
+    const uint32_t backlog = uxQueueMessagesWaiting(filledSlots);
+    if (backlog > statMaxBacklog) statMaxBacklog = backlog;
+  }
+  const int64_t serviceStartUs = esp_timer_get_time();
+  const uint32_t budgetUs =
+      uxQueueMessagesWaiting(filledSlots) >= SLOTS / 2 ? BACKLOG_WRITE_BUDGET_US : WRITE_BUDGET_US;
+  while (elapsedUs(serviceStartUs) < budgetUs) {
     int slotIndex;
     if (xQueueReceive(filledSlots, &slotIndex, 0) != pdTRUE) break;
     const Slot& slot = slots[slotIndex];
+    const int64_t writeStartUs = esp_timer_get_time();
     const bool ok = writeSlot(slot);
+    statSdUs += elapsedUs(writeStartUs);
+    statSdBytes += static_cast<uint32_t>(slot.length);
     xQueueSend(freeSlots, &slotIndex, 0);
     if (!ok) {
       stopRequested = true;
@@ -404,11 +526,19 @@ void service() {
     }
     xSemaphoreGive(lock);
   }
+  if (taskRunning && millis() - statWindowStartMs >= STATS_WINDOW_MS) {
+    xSemaphoreTake(lock, portMAX_DELAY);
+    const uint64_t doneBytes = current.doneBytes;
+    xSemaphoreGive(lock);
+    logWindow(doneBytes);
+  }
 
   // Wrap up once the task is gone and every buffer is on the card.
   xSemaphoreTake(lock, portMAX_DELAY);
   const bool wasActive = current.active;
   xSemaphoreGive(lock);
+  // Paused or finished, and nothing left to write: give the 1.5 MB back.
+  if (!wasActive && !taskRunning && slots[0].data && uxQueueMessagesWaiting(filledSlots) == 0) freeSlotBuffers();
   if (!wasActive || taskRunning || uxQueueMessagesWaiting(filledSlots) > 0) return;
   {
     SdIoMutex::Lock sdLock;
