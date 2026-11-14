@@ -101,6 +101,12 @@ std::vector<SettingInfo> buildSystemSettings() {
   settings.push_back(SettingInfo::Enum("Thumbnail corners", &SystemSetting::bitmapRoundedCorners,
                                        {"Square", "Rounded", "Subtle"}, GroupType::IMAGE));
 
+#if INX_HAS_AUDIO_MODULE
+  settings.push_back(SettingInfo::Separator("Audiobooks", GroupType::AUDIOBOOKS));
+  settings.push_back(SettingInfo::Toggle("Auto-resume downloads when charging",
+                                         &SystemSetting::autoResumeDownloadsOnCharge, GroupType::AUDIOBOOKS));
+#endif
+
   settings.push_back(SettingInfo::Separator("Theme", GroupType::THEME));
 
   settings.push_back(SettingInfo::Separator("Device ", GroupType::DEVICE_ADVANCED));

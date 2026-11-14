@@ -424,6 +424,9 @@ class SystemSetting {
 
   uint8_t bootSetting = RECENT_PAGE;  ///< Boot destination setting
   uint8_t x4proHomeButton = X4PRO_HOME_BUTTON_BACK;  ///< X4 Pro Home key action
+  /// Audio build: queued Audiobookshelf downloads start by themselves on a charger (AbsQueue).
+  /// Off: only books started with Start now download.
+  uint8_t autoResumeDownloadsOnCharge = 1;
 
   /** Book image quality (READER_IMAGE_QUALITY): 0=Low(1-bit), 1=Medium(fast 2-bit grayscale),
    *  2=High(quality 2-bit grayscale with text preserved). */

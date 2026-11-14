@@ -27,6 +27,7 @@
 #include "activity/network/WifiSelectionActivity.h"
 #include "activity/page/SubPage.h"
 #include "activity/util/KeyboardEntryActivity.h"
+#include "state/SystemSetting.h"
 #include "system/AudioPlayer.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
@@ -1356,8 +1357,10 @@ void AbsActivity::renderDownload(int y) {
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
 
   const bool charging = AbsQueue::charging();
-  const char* power = charging ? "On the charger: queued books download now."
-                               : "Not charging: queued books wait for the charger (or Now).";
+  const bool autoResume = SETTINGS.autoResumeDownloadsOnCharge;
+  const char* power = !autoResume ? "Auto-resume on the charger is off (Settings): use Now to download."
+                      : charging  ? "On the charger: queued books download now."
+                                  : "Not charging: queued books wait for the charger (or Now).";
   renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, power, inner).c_str(), true,
                        EpdFontFamily::BOLD);
   y += renderer.text.getLineHeight(smallFont) + GAP;
@@ -1420,7 +1423,9 @@ void AbsActivity::renderDownload(int y) {
         state = "Failed: " + e.error + " (retrying later)";
         break;
       case AbsQueue::State::Waiting:
-        state = e.now || charging ? "Next" : "Waiting for the charger";
+        state = e.now || (charging && autoResume) ? "Next"
+                : autoResume                      ? "Waiting for the charger"
+                                                  : "Waiting (auto-resume off)";
         if (e.now && !charging) state += " (Now: on battery)";
         break;
     }

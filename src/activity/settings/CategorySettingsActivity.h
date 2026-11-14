@@ -39,6 +39,7 @@ enum class GroupType {
   DEVICE_ADVANCED,
   DEVICE_ACTIONS,
   IMAGE,
+  AUDIOBOOKS,
   THEME,
 };
 

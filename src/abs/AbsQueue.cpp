@@ -22,6 +22,7 @@
 #include "AbsDownloader.h"
 #include "AbsLocal.h"
 #include "AbsWifi.h"
+#include "state/SystemSetting.h"
 #include "system/AudioModule.h"
 #include "system/Bq25896.h"
 #include "util/SdIoMutex.h"
@@ -108,6 +109,12 @@ bool readCharger() {
   return Bq25896::readStatus(status) && Bq25896::externalVbusPresent(status);
 }
 
+/**
+ * Books not started with Start now may download: on a charger, unless "Auto-resume downloads when
+ * charging" is off (they then wait in the queue until started by hand).
+ */
+bool chargerDownloadsAllowed() { return onCharger && SETTINGS.autoResumeDownloadsOnCharge; }
+
 void markFailed(const int i, const std::string& error) {
   queue[i].state = State::Failed;
   queue[i].error = error;
@@ -121,7 +128,7 @@ void startNext() {
   const uint32_t now = millis();
   for (size_t i = 0; i < queue.size(); ++i) {
     Entry& e = queue[i];
-    if (!(e.now || onCharger)) continue;
+    if (!(e.now || chargerDownloadsAllowed())) continue;
     if (e.state == State::Failed) {
       if (now - failedAt[i] < RETRY_AFTER_MS) continue;
       e.state = State::Waiting;
@@ -207,7 +214,7 @@ void service() {
     const bool was = onCharger;
     onCharger = readCharger();
     if (was != onCharger) changed();
-    if (onCharger && !was) retryFailed();  // plugged in: failed books try again now
+    if (chargerDownloadsAllowed() && !was) retryFailed();  // plugged in: failed books try again now
   }
 
   // The details came back: start the download (or note why not).
@@ -259,8 +266,8 @@ void service() {
       activeId.clear();
       releaseWifi();
       changed();
-    } else if (!(queue[i].now || onCharger)) {
-      AbsDownloader::pause();  // off the charger: wait for it again
+    } else if (!(queue[i].now || chargerDownloadsAllowed())) {
+      AbsDownloader::pause();  // off the charger (or auto-resume turned off): wait for it again
       queue[i].state = State::Waiting;
       activeId.clear();
       releaseWifi();
@@ -274,7 +281,10 @@ void service() {
 bool keepAwake() {
   if (!onCharger) return false;
   if (!activeId.empty() || fetching) return true;
-  return std::any_of(queue.begin(), queue.end(), [](const Entry& e) { return e.state == State::Waiting; });
+  // Waiting books keep it awake only if they would start (auto-resume off: Start now books only).
+  return std::any_of(queue.begin(), queue.end(), [](const Entry& e) {
+    return e.state == State::Waiting && (e.now || SETTINGS.autoResumeDownloadsOnCharge);
+  });
 }
 
 void shutdown() {
