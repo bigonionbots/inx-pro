@@ -249,9 +249,8 @@ void connectTaskMain(void*) {
     tryOpenPending(attemptsLeft);
   }
   closeBridge("link stopped");
-  connectTask = nullptr;
   xSemaphoreGive(connectDone);
-  vTaskDelete(nullptr);
+  vTaskSuspend(nullptr);  // a PSRAM-stack task cannot delete itself: stop() deletes it
 }
 
 void hostTaskMain(void*) {
@@ -263,10 +262,23 @@ void hostTaskMain(void*) {
     // ESP_OK: nothing left to free. Otherwise ALL_FREE arrives once the devices are gone.
     if ((flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) || usb_host_device_free_all() == ESP_OK) break;
   }
-  hostTask = nullptr;
   xSemaphoreGive(hostDone);
-  vTaskDelete(nullptr);
+  vTaskSuspend(nullptr);  // a PSRAM-stack task cannot delete itself: stop() deletes it
 }
+
+/** Deletes a task that gave its done semaphore and is suspending itself. */
+void deleteStoppedTask(TaskHandle_t& task) {
+  if (!task) return;
+  for (int i = 0; i < 100 && eTaskGetState(task) != eSuspended; ++i) vTaskDelay(pdMS_TO_TICKS(2));
+  vTaskDeleteWithCaps(task);
+  task = nullptr;
+}
+
+/**
+ * The host and link tasks' stacks are in PSRAM: they only move USB events and data (no flash, no
+ * Wi-Fi), and the 8 KB they took from internal RAM is what the streaming TLS connections ran out of.
+ */
+constexpr UBaseType_t TASK_STACK_CAPS = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 
 bool ensurePrimitives() {
   if (!lock) lock = xSemaphoreCreateMutex();
@@ -311,7 +323,9 @@ bool start(const uint32_t baud) {
     currentState = State::Failed;
     return false;
   }
-  if (xTaskCreate(hostTaskMain, "usb_host", TASK_STACK_BYTES, nullptr, HOST_TASK_PRIORITY, &hostTask) != pdPASS) {
+  if (xTaskCreatePinnedToCoreWithCaps(hostTaskMain, "usb_host", TASK_STACK_BYTES, nullptr, HOST_TASK_PRIORITY,
+                                      &hostTask, tskNO_AFFINITY, TASK_STACK_CAPS) != pdPASS) {
+    hostTask = nullptr;
     usb_host_uninstall();
     AudioModule::logf("USB: host task create failed");
     currentState = State::Failed;
@@ -331,8 +345,9 @@ bool start(const uint32_t baud) {
     return false;
   }
 
-  if (xTaskCreate(connectTaskMain, "usb_link", TASK_STACK_BYTES, nullptr, CONNECT_TASK_PRIORITY, &connectTask) !=
-      pdPASS) {
+  if (xTaskCreatePinnedToCoreWithCaps(connectTaskMain, "usb_link", TASK_STACK_BYTES, nullptr, CONNECT_TASK_PRIORITY,
+                                      &connectTask, tskNO_AFFINITY, TASK_STACK_CAPS) != pdPASS) {
+    connectTask = nullptr;
     AudioModule::logf("USB: link task create failed");
     currentState = State::Failed;
     stop();
@@ -354,6 +369,8 @@ void stop() {
     xTaskNotify(connectTask, NOTIFY_STOP, eSetBits);
     if (xSemaphoreTake(connectDone, pdMS_TO_TICKS(STOP_TIMEOUT_MS)) != pdTRUE) {
       AudioModule::logf("USB: link task did not stop");
+    } else {
+      deleteStoppedTask(connectTask);
     }
   }
 
@@ -366,6 +383,7 @@ void stop() {
     currentState = State::Failed;
     return;
   }
+  deleteStoppedTask(hostTask);
   const esp_err_t err = usb_host_uninstall();
   if (err != ESP_OK) AudioModule::logf("USB: host uninstall failed: %s", esp_err_to_name(err));
   if (rxStream) xStreamBufferReset(rxStream);
