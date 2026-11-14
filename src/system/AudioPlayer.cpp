@@ -518,14 +518,24 @@ void syncTaskMain(void*) {
 }
 
 /**
- * The feeder and the sync task, created the first time an Audiobookshelf book needs them: they join
- * Wi-Fi (which may write the PHY calibration to flash), so their stacks stay in internal RAM, 22 KB
- * that a device only reading books (and wanting Wi-Fi for KOReader sync) should not give up.
+ * The feeder and the sync task, created the first time an Audiobookshelf book needs them. Their
+ * stacks (deep, for TLS) are in PSRAM: in internal RAM their 22 KB, taken as streaming started,
+ * left the TLS connections 4 KB and Wi-Fi unable to start again. AbsWifi runs the Wi-Fi steps that
+ * touch flash for them on its own internal-stack task. PSRAM-stack tasks must not exit; these never do.
+ *
+ * Both run on core 1. A TLS handshake is seconds of number crunching (slower with the stack in
+ * PSRAM), and on core 0 next to the e-paper update task it kept core 0's idle task from running
+ * for 5 s: the task watchdog, which watches only that idle task, rebooted the T5 (core dump:
+ * abs_sync in ecdsa_verify).
  */
 void ensureNetworkTasks() {
-  // TLS needs a deep stack.
-  if (!feedTask) xTaskCreate(feedTaskMain, "audio_feed", 12288, nullptr, 2, &feedTask);
-  if (!syncTask) xTaskCreate(syncTaskMain, "abs_sync", 10240, nullptr, 1, &syncTask);
+  constexpr UBaseType_t caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+  if (!feedTask) {
+    xTaskCreatePinnedToCoreWithCaps(feedTaskMain, "audio_feed", 12288, nullptr, 2, &feedTask, 1, caps);
+  }
+  if (!syncTask) {
+    xTaskCreatePinnedToCoreWithCaps(syncTaskMain, "abs_sync", 10240, nullptr, 1, &syncTask, 1, caps);
+  }
 }
 
 void postSync(const SyncRequest& request) {

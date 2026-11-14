@@ -20,7 +20,7 @@
 
 namespace AbsWifi {
 
-/** Loads the saved networks. Main loop (SD); call before acquire() can be needed. */
+/** Loads the saved networks. Main loop (SD); call at boot (it also starts the Wi-Fi step task). */
 void prepare();
 bool hasSavedNetworks();
 /** Blocks up to ~15 s per saved network. Any task. */
