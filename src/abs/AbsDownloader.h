@@ -48,6 +48,9 @@ void pause();
 void service();
 Status status();
 
+/** status().active without copying the rest (the header icon checks it every loop). Any task. */
+bool active();
+
 }  // namespace AbsDownloader
 
 #endif  // INX_HAS_AUDIO_MODULE

@@ -45,13 +45,16 @@ class ScreenComponents {
 
   static void drawBattery(const GfxRenderer& renderer, int left, int top, bool showPercentage = true);
 
-  /** The Wi-Fi status icon (WIFI_ICON_WIDTH x WIFI_ICON_HEIGHT): arcs when connected, struck out when not. */
+  /**
+   * The Wi-Fi status icon (WIFI_ICON_WIDTH x WIFI_ICON_HEIGHT): arcs when connected, struck out when
+   * not. While a background download runs (audio build), a download arrow is drawn left of it too.
+   */
   static void drawWifi(const GfxRenderer& renderer, int left, int top);
   /** drawBattery() adds a charging bolt this far left of the battery while charging, else 0. */
   static int chargingIconReach();
   /** Call before rendering a frame: forgets the Wi-Fi state the last frame showed. */
   static void forgetWifiShown();
-  /** True when this frame drew the Wi-Fi icon and Wi-Fi has since connected or dropped: redraw. */
+  /** True when this frame drew the Wi-Fi icon and Wi-Fi or a download has since started or stopped: redraw. */
   static bool wifiIconStale();
   static void drawBatteryRightAligned(const GfxRenderer& renderer, int right, int top,
                                       bool showPercentage = true);

@@ -19,9 +19,14 @@
 #include <WiFi.h>
 #endif
 
+#if INX_HAS_AUDIO_MODULE
+#include "abs/AbsDownloader.h"
+#endif
+
 #include "images/Back.h"
 #include "images/Battery.h"
 #include "images/Charging.h"
+#include "images/DownloadStatus.h"
 #include "images/Library.h"
 #include "images/Recent.h"
 #include "images/Setting.h"
@@ -108,7 +113,8 @@ void ScreenComponents::drawBattery(const GfxRenderer& renderer, const int left, 
 }
 
 namespace {
-int wifiShown = -1;  // what the current frame's icon shows: -1 none, 0 off, 1 connected
+// What the current frame's icons show: -1 none drawn, else bit 0 connected, bit 1 downloading.
+int wifiShown = -1;
 
 bool wifiConnected() {
 #ifdef SIMULATOR
@@ -117,12 +123,29 @@ bool wifiConnected() {
   return WiFi.status() == WL_CONNECTED;
 #endif
 }
+
+/** A background book download is running: the reason Wi-Fi is on with no network screen open. */
+bool downloading() {
+#if INX_HAS_AUDIO_MODULE
+  return AbsDownloader::active();
+#else
+  return false;
+#endif
+}
+
+int wifiState() { return (wifiConnected() ? 1 : 0) | (downloading() ? 2 : 0); }
 }  // namespace
 
 void ScreenComponents::drawWifi(const GfxRenderer& renderer, const int left, const int top) {
-  const bool connected = wifiConnected();
-  renderer.bitmap.icon(connected ? WifiOnIcon : WifiOffIcon, left, top, WIFI_ICON_WIDTH, WIFI_ICON_HEIGHT);
-  wifiShown = connected ? 1 : 0;
+  const int state = wifiState();
+  renderer.bitmap.icon((state & 1) ? WifiOnIcon : WifiOffIcon, left, top, WIFI_ICON_WIDTH, WIFI_ICON_HEIGHT);
+  if (state & 2) {
+    constexpr int gap = 8;
+    renderer.bitmap.icon(DownloadStatusIcon, left - gap - DOWNLOAD_STATUS_ICON_WIDTH,
+                         top + (WIFI_ICON_HEIGHT - DOWNLOAD_STATUS_ICON_HEIGHT) / 2, DOWNLOAD_STATUS_ICON_WIDTH,
+                         DOWNLOAD_STATUS_ICON_HEIGHT);
+  }
+  wifiShown = state;
 }
 
 int ScreenComponents::chargingIconReach() {
@@ -135,7 +158,7 @@ int ScreenComponents::chargingIconReach() {
 
 void ScreenComponents::forgetWifiShown() { wifiShown = -1; }
 
-bool ScreenComponents::wifiIconStale() { return wifiShown >= 0 && wifiShown != (wifiConnected() ? 1 : 0); }
+bool ScreenComponents::wifiIconStale() { return wifiShown >= 0 && wifiShown != wifiState(); }
 
 void ScreenComponents::drawBatteryRightAligned(const GfxRenderer& renderer, const int right, const int top,
                                                const bool showPercentage) {

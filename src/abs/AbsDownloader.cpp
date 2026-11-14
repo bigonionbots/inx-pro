@@ -562,6 +562,14 @@ Status status() {
   return copy;
 }
 
+bool active() {
+  if (!lock) return false;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  const bool running = current.active;
+  xSemaphoreGive(lock);
+  return running;
+}
+
 }  // namespace AbsDownloader
 
 #endif  // INX_HAS_AUDIO_MODULE

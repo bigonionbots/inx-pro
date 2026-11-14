@@ -117,7 +117,7 @@ void markFailed(const int i, const std::string& error) {
 
 /** Starts fetching the details of the first book allowed to run now. */
 void startNext() {
-  if (heldOff || suspended || !activeId.empty() || fetching || fetchDone || AbsDownloader::status().active) return;
+  if (heldOff || suspended || !activeId.empty() || fetching || fetchDone || AbsDownloader::active()) return;
   const uint32_t now = millis();
   for (size_t i = 0; i < queue.size(); ++i) {
     Entry& e = queue[i];
