@@ -9,6 +9,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -16,6 +17,7 @@
 #include <vector>
 
 #include "state/NetworkCredential.h"
+#include "system/AudioModule.h"
 #include "util/SdIoMutex.h"
 
 namespace AbsWifi {
@@ -31,6 +33,27 @@ bool turnedOn = false;
 
 void ensureLock() {
   if (!lock) lock = xSemaphoreCreateRecursiveMutex();
+}
+
+/** Why a join attempt ended without a connection, from the station status it left. */
+const char* joinFailure(const wl_status_t status) {
+  switch (status) {
+    case WL_NO_SSID_AVAIL:
+      return "not found";  // not on the air: out of range, hotspot asleep, or 5/6 GHz only
+    case WL_CONNECT_FAILED:
+      return "refused";  // found, but would not let the T5 join (wrong password?)
+    case WL_CONNECTION_LOST:
+      return "connection lost";
+    default:
+      return "no answer";  // found, but the join timed out
+  }
+}
+
+/** Turns Wi-Fi off, saying why in the module log (the console is gone while the module runs). */
+void turnOff(const char* why) {
+  WiFi.disconnect(false);
+  WiFi.mode(WIFI_OFF);
+  AudioModule::logf("Wi-Fi: off (%s)", why);
 }
 
 }  // namespace
@@ -84,27 +107,44 @@ bool acquire(std::string& error) {
     error = "No saved Wi-Fi network";
     return false;
   }
-  WiFi.mode(WIFI_STA);
+  if (!WiFi.mode(WIFI_STA)) {
+    // The driver needs internal RAM for its buffers; it is what runs out first.
+    WiFi.mode(WIFI_OFF);
+    xSemaphoreGiveRecursive(lock);
+    error = "Wi-Fi could not start (low memory?)";
+    AudioModule::logf("Wi-Fi: could not start (internal RAM %u bytes free)",
+                      static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+    return false;
+  }
+  std::string tried;  // "HighTail not found, Home refused"
+  bool anyNotFound = false;
   for (const auto& network : networks) {
+    AudioModule::logf("Wi-Fi: joining %s", network.first.c_str());
     WiFi.begin(network.first.c_str(), network.second.c_str());
     const uint32_t started = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - started < CONNECT_TIMEOUT_MS) {
       vTaskDelay(pdMS_TO_TICKS(250));
     }
-    if (WiFi.status() == WL_CONNECTED) {
+    const wl_status_t status = WiFi.status();
+    if (status == WL_CONNECTED) {
       turnedOn = true;
       ++users;
+      AudioModule::logf("Wi-Fi: joined %s (%d dBm, %s)", network.first.c_str(), WiFi.RSSI(),
+                        WiFi.localIP().toString().c_str());
       xSemaphoreGiveRecursive(lock);
       return true;
     }
+    const char* why = joinFailure(status);
+    anyNotFound = anyNotFound || status == WL_NO_SSID_AVAIL;
+    AudioModule::logf("Wi-Fi: %s %s after %lu ms (status %d)", network.first.c_str(), why,
+                      static_cast<unsigned long>(millis() - started), static_cast<int>(status));
+    tried += (tried.empty() ? "" : ", ") + network.first + " " + why;
     WiFi.disconnect(false);
     vTaskDelay(pdMS_TO_TICKS(100));
   }
-  std::string tried;
-  for (const auto& network : networks) tried += (tried.empty() ? "" : ", ") + network.first;
-  WiFi.mode(WIFI_OFF);
+  turnOff("could not join");
   xSemaphoreGiveRecursive(lock);
-  error = "Could not join Wi-Fi (" + tried + ")";
+  error = "Could not join Wi-Fi: " + tried + (anyNotFound ? " (hotspot asleep, or 5 GHz only?)" : "");
   return false;
 }
 
@@ -119,8 +159,7 @@ void offIfUnused() {
   ensureLock();
   xSemaphoreTakeRecursive(lock, portMAX_DELAY);
   if (users == 0 && !hotspotActive()) {
-    WiFi.disconnect(false);
-    WiFi.mode(WIFI_OFF);
+    if (WiFi.getMode() != WIFI_OFF) turnOff("screen closed");
     turnedOn = false;
   }
   xSemaphoreGiveRecursive(lock);
@@ -132,10 +171,7 @@ void release() {
   if (users > 0) --users;
   if (users == 0 && turnedOn) {
     // Not under a hotspot started since: that is its screen's to turn off.
-    if (!hotspotActive()) {
-      WiFi.disconnect(false);
-      WiFi.mode(WIFI_OFF);
-    }
+    if (!hotspotActive()) turnOff("not needed");
     turnedOn = false;
   }
   xSemaphoreGiveRecursive(lock);

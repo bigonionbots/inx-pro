@@ -533,7 +533,23 @@ void AudioPlayerActivity::renderNowPlaying(int y) {
   renderer.text.render(font, MARGIN, y, moduleStateName(v));
   y += renderer.text.getLineHeight(font) + GAP;
   if (!v.message.empty()) {
-    renderer.text.render(smallFont, MARGIN, y, renderer.text.truncate(smallFont, v.message.c_str(), inner).c_str());
+    // Wrapped at spaces, up to three lines: a network error says which networks failed and why.
+    constexpr int MAX_MESSAGE_LINES = 3;
+    const int lineHeight = renderer.text.getLineHeight(smallFont);
+    std::string rest = v.message;
+    for (int line = 0; line < MAX_MESSAGE_LINES && !rest.empty(); ++line) {
+      size_t take = rest.size();
+      if (line + 1 < MAX_MESSAGE_LINES) {
+        while (take > 0 && renderer.text.getWidth(smallFont, rest.substr(0, take).c_str()) > inner) {
+          const size_t space = rest.rfind(' ', take - 1);
+          take = space == std::string::npos || space == 0 ? 0 : space;
+        }
+        if (take == 0) take = rest.size();  // one word wider than the line: truncated below
+      }
+      renderer.text.render(smallFont, MARGIN, y + line * lineHeight,
+                           renderer.text.truncate(smallFont, rest.substr(0, take).c_str(), inner).c_str());
+      rest = take < rest.size() ? rest.substr(take + 1) : "";
+    }
   }
 }
 
