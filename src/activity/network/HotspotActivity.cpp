@@ -15,6 +15,7 @@
 
 #include "activity/page/SubPage.h"
 #if INX_HAS_AUDIO_MODULE
+#include "system/AudioModule.h"
 #include "system/AudioPlayer.h"
 #endif
 #include "system/Fonts.h"
@@ -83,6 +84,13 @@ void HotspotActivity::onEnter() {
   Activity::onEnter();
 
   INX_SERIAL.printf("[%lu] [HOTSPOT] Starting hotspot mode\n", millis());
+#if INX_HAS_AUDIO_MODULE
+  // The console is gone while the audio module runs: say it in the module log too.
+  AudioModule::logf("Hotspot: opening (Wi-Fi mode %d, status %d; internal RAM %u free, largest block %u)",
+                    static_cast<int>(WiFi.getMode()), static_cast<int>(WiFi.status()),
+                    static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                    static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
+#endif
 
   renderingMutex = xSemaphoreCreateMutex();
   updateRequired = true;
@@ -141,10 +149,16 @@ void HotspotActivity::onExit() {
 void HotspotActivity::startAccessPoint() {
   INX_SERIAL.printf("[%lu] [HOTSPOT] Starting Access Point...\n", millis());
 
+#if INX_HAS_AUDIO_MODULE
+  AudioModule::logf("Hotspot: switching Wi-Fi to access point");
+#endif
   WiFi.mode(WIFI_AP);
   delay(100);
 
   bool apStarted = WiFi.softAP(AP_SSID, nullptr, AP_CHANNEL, false, AP_MAX_CONNECTIONS);
+#if INX_HAS_AUDIO_MODULE
+  AudioModule::logf("Hotspot: access point %s", apStarted ? "started" : "failed");
+#endif
 
   if (!apStarted) {
     INX_SERIAL.printf("[%lu] [HOTSPOT] ERROR: Failed to start Access Point!\n", millis());
@@ -173,6 +187,9 @@ void HotspotActivity::startAccessPoint() {
   dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
   dnsServer->start(DNS_PORT, "*", apIP);
   INX_SERIAL.printf("[%lu] [HOTSPOT] DNS server started for captive portal\n", millis());
+#if INX_HAS_AUDIO_MODULE
+  AudioModule::logf("Hotspot: DNS started");
+#endif
 
   startWebServer();
 }
@@ -188,10 +205,16 @@ void HotspotActivity::startWebServer() {
 
   if (webServer->isRunning()) {
     INX_SERIAL.printf("[%lu] [HOTSPOT] Web server started successfully\n", millis());
+#if INX_HAS_AUDIO_MODULE
+    AudioModule::logf("Hotspot: web server started");
+#endif
     state = HotspotState::RUNNING;
     updateRequired = true;
   } else {
     INX_SERIAL.printf("[%lu] [HOTSPOT] ERROR: Failed to start web server!\n", millis());
+#if INX_HAS_AUDIO_MODULE
+    AudioModule::logf("Hotspot: web server failed");
+#endif
     webServer.reset();
     state = HotspotState::ERROR;
     updateRequired = true;

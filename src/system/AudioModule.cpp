@@ -137,12 +137,55 @@ void boostOff(const char* reason) {
 }
 
 // Multiplicative hash: no short period, so a few bytes pin down their position in the stream.
+/**
+ * Allocations that failed, for the log: with the console gone while the module runs, this is how
+ * to see which kind of memory ran out (small mallocs, DMA buffers, PSRAM). The hook only records
+ * (it may run inside the allocator, on any task); service() writes the lines on the main loop.
+ */
+struct FailedAlloc {
+  uint32_t size;
+  uint32_t caps;
+  uint32_t internalFree;
+  uint32_t internalBlock;
+};
+constexpr uint32_t FAILED_ALLOC_SLOTS = 8;
+FailedAlloc failedAllocs[FAILED_ALLOC_SLOTS];
+std::atomic<uint32_t> failedAllocCount{0};
+uint32_t failedAllocsLogged = 0;
+
+void onAllocFailed(const size_t size, const uint32_t caps, const char*) {
+  const uint32_t index = failedAllocCount.fetch_add(1);
+  FailedAlloc& slot = failedAllocs[index % FAILED_ALLOC_SLOTS];
+  slot.size = static_cast<uint32_t>(size);
+  slot.caps = caps;
+  slot.internalFree = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  slot.internalBlock = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
+void logFailedAllocs() {
+  const uint32_t count = failedAllocCount.load();
+  if (count == failedAllocsLogged) return;
+  if (count - failedAllocsLogged > FAILED_ALLOC_SLOTS) {
+    logf("RAM: %lu allocations failed", static_cast<unsigned long>(count - failedAllocsLogged - FAILED_ALLOC_SLOTS));
+    failedAllocsLogged = count - FAILED_ALLOC_SLOTS;
+  }
+  for (; failedAllocsLogged != count; ++failedAllocsLogged) {
+    const FailedAlloc slot = failedAllocs[failedAllocsLogged % FAILED_ALLOC_SLOTS];
+    logf("RAM: allocation failed: %lu bytes, caps 0x%lx%s%s%s; internal %lu free, largest block %lu",
+         static_cast<unsigned long>(slot.size), static_cast<unsigned long>(slot.caps),
+         (slot.caps & MALLOC_CAP_DMA) ? " DMA" : "", (slot.caps & MALLOC_CAP_INTERNAL) ? " internal" : "",
+         (slot.caps & MALLOC_CAP_SPIRAM) ? " PSRAM" : "", static_cast<unsigned long>(slot.internalFree),
+         static_cast<unsigned long>(slot.internalBlock));
+  }
+}
+
 // The module repository's diagnostic firmware uses the same pattern.
 uint8_t linkPatternByte(const uint32_t index) { return static_cast<uint8_t>((index * 2654435761u) >> 24); }
 
 }  // namespace
 
 void begin(const bool keepBoost) {
+  heap_caps_register_failed_alloc_callback(onAllocFailed);
   if (!Bq25896::present()) {
     logf("Charger: BQ25896 not found");
     return;
@@ -160,6 +203,7 @@ void begin(const bool keepBoost) {
 }
 
 void service() {
+  logFailedAllocs();
   const uint32_t now = millis();
   const bool screenWatching = lastSnapshotMs != 0 && now - lastSnapshotMs < SCREEN_POLL_WINDOW_MS;
   if (!powerOn && !linkOn && !screenWatching) return;
@@ -228,7 +272,13 @@ bool isPowerOn() { return powerOn; }
 bool setLinkEnabled(const bool on) {
   if (on == linkOn) return true;
   if (on) {
+    logf("RAM: before link: internal %u bytes free, largest block %u",
+         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+         static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
     linkOn = UsbSerialHost::start(LINK_BAUD);
+    logf("RAM: link started: internal %u bytes free, largest block %u",
+         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+         static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
     // Give a module that is already powered the full window to enumerate.
     if (powerOn) noDeviceSinceMs = millis();
   } else {
