@@ -42,6 +42,7 @@
 #include "activity/system/SleepActivity.h"
 #include "activity/util/FullScreenMessageActivity.h"
 #include "activity/util/KeyboardEntryActivity.h"
+#include "network/DnsFallback.h"
 #include "state/ReaderSetting.h"
 #include "state/SystemSetting.h"
 #if INX_HAS_GAMES
@@ -477,6 +478,7 @@ void setup() {
   DeviceRuntime::initialize(gpio);
 
   sdCardAvailable = SdMan.begin();
+  DnsFallback::begin();  // public DNS behind the network's (phone hotspots that do not answer)
 
 #if INX_HAS_GAMES
   // A game launch restarts into this boot path, which drives the panel itself (GameMode.h).
