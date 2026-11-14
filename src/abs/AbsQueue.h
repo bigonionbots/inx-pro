@@ -79,6 +79,15 @@ void retryFailed();
  */
 void holdOff(bool hold);
 
+/**
+ * A screen takes the radio for something else (the hotspot puts it in access point mode): a
+ * running download pauses (what it has is on the card) and nothing starts until
+ * resumeAfterScreen(), which lets the queue pick it up again; the downloader then rejoins a saved
+ * network itself. Call before AbsWifi::claimForScreen() and after AbsWifi::releaseScreen().
+ */
+void suspendForScreen();
+void resumeAfterScreen();
+
 /** On a charger (external power on VBUS), as last checked. */
 bool charging();
 

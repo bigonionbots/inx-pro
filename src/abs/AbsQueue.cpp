@@ -22,6 +22,7 @@
 #include "AbsDownloader.h"
 #include "AbsLocal.h"
 #include "AbsWifi.h"
+#include "system/AudioModule.h"
 #include "system/Bq25896.h"
 #include "util/SdIoMutex.h"
 
@@ -51,6 +52,7 @@ Abs::ItemDetail fetchedDetail;       // written by the task before fetchDone
 std::string fetchError;              // ditto
 std::atomic<bool> wifiHeld{false};   // the queue's share of Wi-Fi, from the fetch to the download's end
 bool heldOff = false;                // holdOff(): start nothing new
+bool suspended = false;              // suspendForScreen(): another screen has the radio
 
 void changed() { ++changes; }
 
@@ -115,7 +117,7 @@ void markFailed(const int i, const std::string& error) {
 
 /** Starts fetching the details of the first book allowed to run now. */
 void startNext() {
-  if (heldOff || !activeId.empty() || fetching || fetchDone || AbsDownloader::status().active) return;
+  if (heldOff || suspended || !activeId.empty() || fetching || fetchDone || AbsDownloader::status().active) return;
   const uint32_t now = millis();
   for (size_t i = 0; i < queue.size(); ++i) {
     Entry& e = queue[i];
@@ -178,6 +180,24 @@ void retryFailed() {
 
 void holdOff(const bool hold) { heldOff = hold; }
 
+void suspendForScreen() {
+  suspended = true;
+  if (activeId.empty()) return;
+  const int i = find(activeId);
+  AudioModule::logf("Downloads: paused for the hotspot");
+  AbsDownloader::pause();  // resumes from what is on the card
+  if (i >= 0) queue[i].state = State::Waiting;
+  activeId.clear();
+  releaseWifi();
+  changed();
+}
+
+void resumeAfterScreen() {
+  if (!suspended) return;
+  suspended = false;
+  retryFailed();  // a fetch refused the radio meanwhile: not 10 minutes from now
+}
+
 void service() {
   AbsDownloader::service();  // writes downloaded buffers to the card, whatever screen is open
 
@@ -195,6 +215,10 @@ void service() {
     const int i = find(fetchId);
     if (i < 0) {
       releaseWifi();  // removed meanwhile
+    } else if (suspended) {
+      releaseWifi();  // the radio was taken meanwhile: wait for it (resumeAfterScreen())
+      queue[i].state = State::Waiting;
+      changed();
     } else if (!fetchError.empty()) {
       releaseWifi();
       markFailed(i, fetchError);

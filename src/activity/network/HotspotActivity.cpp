@@ -15,6 +15,8 @@
 
 #include "activity/page/SubPage.h"
 #if INX_HAS_AUDIO_MODULE
+#include "abs/AbsQueue.h"
+#include "abs/AbsWifi.h"
 #include "system/AudioModule.h"
 #include "system/AudioPlayer.h"
 #endif
@@ -98,7 +100,10 @@ void HotspotActivity::onEnter() {
 
 #if INX_HAS_AUDIO_MODULE
   // As on Manage via WiFi: a playing book pauses and its stream lets go (it needs a network the
-  // hotspot replaces), and plays again on leaving, once Wi-Fi reconnects.
+  // hotspot replaces), and plays again on leaving, once Wi-Fi reconnects. A background download
+  // pauses the same way and the queue resumes it from the card on leaving.
+  AbsQueue::suspendForScreen();
+  AbsWifi::claimForScreen();  // a background join must finish, and none start, before AP mode
   resumeAudio = AudioPlayer::suspendForScreen();
 #endif
 
@@ -128,6 +133,8 @@ void HotspotActivity::onExit() {
   delay(30);
 
 #if INX_HAS_AUDIO_MODULE
+  AbsWifi::releaseScreen();
+  AbsQueue::resumeAfterScreen();
   AudioPlayer::resumeAfterScreen(resumeAudio, false);  // the stream joins a saved network itself
   resumeAudio = false;
 #endif

@@ -31,6 +31,15 @@ bool connected();
 void adopt();
 /** Turns Wi-Fi off unless something holds it (after a cancelled picker). Main loop. */
 void offIfUnused();
+/**
+ * A screen takes the radio for itself (the hotspot switches it to access point mode). Waits for a
+ * join in progress to finish, since Arduino's Wi-Fi calls are not safe from two tasks at once (the
+ * hotspot froze when it opened during a background join). Until releaseScreen(), acquire() fails
+ * at once and nothing here turns Wi-Fi off. Main loop.
+ */
+void claimForScreen();
+/** The screen is done with the radio (after turning it off). Main loop. */
+void releaseScreen();
 
 /** RAII user of the connection. */
 class Use {

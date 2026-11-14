@@ -33,6 +33,7 @@ SemaphoreHandle_t lock = nullptr;
 std::vector<std::pair<std::string, std::string>> networks;  // ssid, password
 int users = 0;
 bool turnedOn = false;
+bool screenOwned = false;  // claimForScreen(): a screen drives the radio itself
 
 /**
  * Starting, joining and stopping Wi-Fi read and write flash (NVS: the PHY calibration, the station
@@ -181,6 +182,11 @@ bool hotspotActive() { return (WiFi.getMode() & WIFI_MODE_AP) != 0; }
 
 bool acquire(std::string& error) {
   takeLock();
+  if (screenOwned) {
+    giveLock();
+    error = "Wi-Fi is in use by another screen";
+    return false;
+  }
   if (WiFi.status() == WL_CONNECTED) {
     ++users;
     giveLock();
@@ -244,7 +250,7 @@ void adopt() {
 
 void offIfUnused() {
   takeLock();
-  if (users == 0 && !hotspotActive()) {
+  if (users == 0 && !screenOwned && !hotspotActive()) {
     if (WiFi.getMode() != WIFI_OFF) doStep(Step::Off, nullptr, nullptr, "screen closed");
     turnedOn = false;
   }
@@ -255,10 +261,23 @@ void release() {
   takeLock();
   if (users > 0) --users;
   if (users == 0 && turnedOn) {
-    // Not under a hotspot started since: that is its screen's to turn off.
-    if (!hotspotActive()) doStep(Step::Off, nullptr, nullptr, "not needed");
+    // Not under a screen that took the radio, or a hotspot started since: those are theirs to turn off.
+    if (!screenOwned && !hotspotActive()) doStep(Step::Off, nullptr, nullptr, "not needed");
     turnedOn = false;
   }
+  giveLock();
+}
+
+void claimForScreen() {
+  takeLock();  // waits for a join in progress (up to CONNECT_TIMEOUT_MS per saved network)
+  screenOwned = true;
+  giveLock();
+}
+
+void releaseScreen() {
+  takeLock();
+  screenOwned = false;
+  turnedOn = false;  // whatever the screen left is not ours to turn off
   giveLock();
 }
 
