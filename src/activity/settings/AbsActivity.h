@@ -89,6 +89,7 @@ class AbsActivity final : public ActivityWithSubactivity {
     QueueUp,
     QueueDown,
     QueueNow,
+    QueuePause,
     QueueRemove,
     OpenEpisode,   ///< index = position in show.episodes
     ConnectQueue,  ///< Downloads page: the Wi-Fi picker, for the queue

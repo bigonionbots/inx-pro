@@ -789,6 +789,7 @@ void AbsActivity::run(const Action action, const int index) {
     case Action::QueueUp:
     case Action::QueueDown:
     case Action::QueueNow:
+    case Action::QueuePause:
     case Action::QueueRemove: {
       const std::vector<AbsQueue::Entry> queued = AbsQueue::entries();
       if (downloadSel < 0 || downloadSel >= static_cast<int>(queued.size())) return;
@@ -799,6 +800,8 @@ void AbsActivity::run(const Action action, const int index) {
       } else if (action == Action::QueueDown) {
         AbsQueue::move(id, 1);
         downloadSel = std::min(static_cast<int>(queued.size()) - 1, downloadSel + 1);
+      } else if (action == Action::QueuePause) {
+        AbsQueue::pause(id);
       } else if (action == Action::QueueNow) {
         downloadSel = 0;
         if (!AbsWifi::connected()) {
@@ -1365,10 +1368,11 @@ void AbsActivity::renderDownload(int y) {
                        EpdFontFamily::BOLD);
   y += renderer.text.getLineHeight(smallFont) + GAP;
   // The queue connects with the saved networks by itself; when that fails, connect here.
-  const bool needsWifi = !queued.empty() && !AbsWifi::connected() &&
-                         std::any_of(queued.begin(), queued.end(), [charging](const AbsQueue::Entry& e) {
-                           return e.state == AbsQueue::State::Failed || e.now || charging;
-                         });
+  const bool needsWifi =
+      !queued.empty() && !AbsWifi::connected() &&
+      std::any_of(queued.begin(), queued.end(), [charging](const AbsQueue::Entry& e) {
+        return e.state != AbsQueue::State::Paused && (e.state == AbsQueue::State::Failed || e.now || charging);
+      });
   if (needsWifi) {
     button(MARGIN, y, inner, BUTTON_HEIGHT, "Connect to Wi-Fi", Action::ConnectQueue, 0, true);
     y += BUTTON_HEIGHT + GAP;
@@ -1422,6 +1426,9 @@ void AbsActivity::renderDownload(int y) {
       case AbsQueue::State::Failed:
         state = "Failed: " + e.error + " (retrying later)";
         break;
+      case AbsQueue::State::Paused:
+        state = "Paused (Now resumes it)";
+        break;
       case AbsQueue::State::Waiting:
         state = e.now || (charging && autoResume) ? "Next"
                 : autoResume                      ? "Waiting for the charger"
@@ -1435,13 +1442,18 @@ void AbsActivity::renderDownload(int y) {
     y += BOOK_ROW_HEIGHT;
   }
 
-  // The selected book: earlier, later, start now (also on battery), remove (and delete its part).
+  // The selected book: earlier, later, start now (also on battery) or pause it while it runs,
+  // remove (and delete its part).
+  const AbsQueue::State selectedState = queued[downloadSel].state;
+  const bool running = selectedState == AbsQueue::State::Downloading || selectedState == AbsQueue::State::Starting;
   const int quarter = (inner - 3 * GAP) / 4;
   const struct {
     const char* label;
     Action action;
-  } controls[] = {
-      {"Up", Action::QueueUp}, {"Down", Action::QueueDown}, {"Now", Action::QueueNow}, {"Remove", Action::QueueRemove}};
+  } controls[] = {{"Up", Action::QueueUp},
+                  {"Down", Action::QueueDown},
+                  {running ? "Pause" : "Now", running ? Action::QueuePause : Action::QueueNow},
+                  {"Remove", Action::QueueRemove}};
   for (int i = 0; i < 4; ++i) {
     button(MARGIN + i * (quarter + GAP), controlsY, quarter, BUTTON_HEIGHT, controls[i].label, controls[i].action);
   }

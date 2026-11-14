@@ -64,7 +64,9 @@ void save() {
     o["id"] = e.itemId;
     o["title"] = e.title;
     o["author"] = e.author;
-    o["now"] = e.now;
+    // Not `now`: it lasted across reboots and started books at boot whatever the auto-resume
+    // setting said. After a reboot only the setting (or Start now again) starts a download.
+    if (e.paused) o["paused"] = true;
   }
   std::string text;
   serializeJson(doc, text);
@@ -167,7 +169,8 @@ void begin() {
         e.itemId = o["id"] | "";
         e.title = o["title"] | "";
         e.author = o["author"] | "";
-        e.now = o["now"] | false;
+        e.paused = o["paused"] | false;
+        if (e.paused) e.state = State::Paused;
         if (!e.itemId.empty()) queue.push_back(e);
       }
     }
@@ -222,6 +225,8 @@ void service() {
     const int i = find(fetchId);
     if (i < 0) {
       releaseWifi();  // removed meanwhile
+    } else if (queue[i].paused) {
+      releaseWifi();  // paused while its details were on the way
     } else if (suspended) {
       releaseWifi();  // the radio was taken meanwhile: wait for it (resumeAfterScreen())
       queue[i].state = State::Waiting;
@@ -351,9 +356,28 @@ void startNow(const std::string& itemId) {
   queue.erase(queue.begin() + i);
   failedAt.erase(failedAt.begin() + i);
   e.now = true;
-  if (e.state == State::Failed) e.state = State::Waiting;  // try again at once
+  e.paused = false;
+  if (e.state == State::Failed || e.state == State::Paused) e.state = State::Waiting;  // at once
   queue.insert(queue.begin(), e);
   failedAt.insert(failedAt.begin(), e.state == State::Failed ? failed : 0);
+  save();
+  changed();
+}
+
+void pause(const std::string& itemId) {
+  const int i = find(itemId);
+  if (i < 0) return;
+  if (activeId == itemId) {
+    AbsDownloader::pause();  // resumes from what is on the card
+    activeId.clear();
+    releaseWifi();
+  }
+  // A fetch of its details in flight: service() drops the result (the entry is paused).
+  queue[i].now = false;
+  queue[i].paused = true;
+  queue[i].state = State::Paused;
+  queue[i].error.clear();
+  failedAt[i] = 0;
   save();
   changed();
 }

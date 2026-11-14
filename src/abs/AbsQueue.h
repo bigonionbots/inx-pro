@@ -30,13 +30,15 @@ enum class State : uint8_t {
   Starting,     ///< fetching its details
   Downloading,  ///< the downloader is on it
   Failed,       ///< stopped with an error; retried after a while, or by Start now
+  Paused,       ///< paused by hand: never starts by itself, Start now resumes it
 };
 
 struct Entry {
   std::string itemId;
   std::string title;
   std::string author;
-  bool now = false;  ///< Start now: downloads on battery too
+  bool now = false;     ///< Start now: downloads on battery too; until the next boot (not saved)
+  bool paused = false;  ///< pause(): saved, so it stays paused after a reboot
   State state = State::Waiting;
   std::string error;
 };
@@ -67,8 +69,11 @@ void remove(const std::string& itemId);
 /** One place earlier or later in the queue. A running download keeps running. */
 void move(const std::string& itemId, int delta);
 
-/** To the front, allowed on battery, and (if another book is downloading) next in line. */
+/** To the front, allowed on battery, and (if another book is downloading) next in line. Resumes a paused book. */
 void startNow(const std::string& itemId);
+
+/** Stops the book's download (what it has stays on the card) and keeps it from starting by itself. */
+void pause(const std::string& itemId);
 
 /** Failed books try again at once (Wi-Fi is back, the charger plugged in), not in 10 minutes. */
 void retryFailed();
