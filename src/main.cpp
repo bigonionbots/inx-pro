@@ -486,6 +486,12 @@ void setup() {
 #endif
 
 #if INX_HAS_AUDIO_MODULE
+  // malloc() keeps blocks under 4 KB (CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL) in internal RAM. Opening
+  // a long audiobook scattered strings, chapter lists and MP4 tables through it, and the Wi-Fi driver
+  // then found no 1.6 KB DMA block for its packets: the stream and sync stalled. From 256 bytes up,
+  // PSRAM first. Not in a game boot (GameMode::run() above does not return): FastEPD's DMA line
+  // buffer comes from plain malloc().
+  heap_caps_malloc_extmem_enable(256);
   AudioModule::begin();
   AudioLink::begin();
   AudioPlayer::begin();
