@@ -49,6 +49,9 @@
 #include "activity/settings/GamesActivity.h"
 #include "games/GameMode.h"
 #endif
+#if INX_HAS_GAMES
+#include "activity/settings/GamesMenuActivity.h"
+#endif
 #if INX_HAS_AUDIO_MODULE
 #include "abs/AbsClient.h"
 #include "abs/AbsCovers.h"
@@ -279,16 +282,23 @@ void onGoToHeatmapReport(const HomeTheme::HeatmapView view) {
   switchTo<HeatmapReport>(render, input, view, [] { onGoToHome(); });
 }
 
+#if INX_HAS_GAMES
+/** The Games menu (Apps, Home's shortcut): each game opens from it and comes back to it. */
+void onGoToGames() {
+  switchTo<GamesMenuActivity>(render, input, [] { onGoToHome(); });
+}
+#endif
+
+#if INX_HAS_GAMES
+void onGoToGameBoy() {
+  switchTo<GamesActivity>(render, input, [] { onGoToGames(); });
+}
+#endif
+
 #if INX_HAS_AUDIO_MODULE
 void onGoToAudiobooks() {
   switchTo<AudioPlayerActivity>(render, input, [] { onGoToHome(); });
 }
-
-#if INX_HAS_GAMES
-void onGoToGames() {
-  switchTo<GamesActivity>(render, input, [] { onGoToHome(); });
-}
-#endif
 
 /** Audiobook listening stats, from the Audiobooks page; back returns to that page. */
 void onGoToListeningStats() {
