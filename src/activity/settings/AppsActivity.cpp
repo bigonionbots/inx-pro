@@ -17,7 +17,7 @@
 #if INX_HAS_AUDIO_MODULE
 #include "images/Headphones.h"
 #endif
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
 #include "images/Gamepad.h"
 #endif
 #include "images/Search.h"
@@ -33,7 +33,7 @@ extern void onGoToAudiobooks();
 #else
 #define INX_APPS_AUDIO_ROWS 0
 #endif
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
 extern void onGoToGames();
 #endif
 
@@ -56,15 +56,19 @@ constexpr AppItem kMenuItems[] = {
 #if INX_HAS_AUDIO_MODULE
     {"Audiobooks", "Play audiobooks through the audio module", Headphones},
 #endif
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
 #if INX_HAS_GAMES
-    {"Games", "Play Game Boy and Game Boy Color games", Gamepad},
+    {"Games", "Game Boy and Sudoku", Gamepad},
+#else
+    {"Games", "Sudoku", Gamepad},
+#endif
 #endif
 };
 constexpr int kMenuItemCount = static_cast<int>(sizeof(kMenuItems) / sizeof(kMenuItems[0]));
 #if INX_HAS_AUDIO_MODULE
 constexpr int kAudiobooksItem = 7;
 #endif
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
 constexpr int kGamesItem = 7 + INX_APPS_AUDIO_ROWS;
 #endif
 
@@ -148,7 +152,7 @@ void AppsActivity::openSelected() {
       onGoToAudiobooks();
       break;
 #endif
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
     case kGamesItem:
       onGoToGames();
       break;

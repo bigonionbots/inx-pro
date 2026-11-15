@@ -5,7 +5,7 @@
 
 #include "GamesMenuActivity.h"
 
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
 
 #include <GfxRenderer.h>
 
@@ -15,9 +15,19 @@
 #include "activity/page/SubPage.h"
 #include "system/Fonts.h"
 #include "system/MappedInputManager.h"
+#if INX_HAS_GAMES
 #include "images/Gamepad.h"
+#endif
+#if INX_HAS_PUZZLES
+#include "images/Sudoku.h"
+#endif
 
+#if INX_HAS_GAMES
 extern void onGoToGameBoy();
+#endif
+#if INX_HAS_PUZZLES
+extern void onGoToSudoku();
+#endif
 
 namespace {
 
@@ -29,7 +39,12 @@ struct GameItem {
 };
 
 constexpr GameItem kGames[] = {
+#if INX_HAS_GAMES
     {"Game Boy", "Play Game Boy and Game Boy Color games", Gamepad, onGoToGameBoy},
+#endif
+#if INX_HAS_PUZZLES
+    {"Sudoku", "Number puzzles, from beginner to expert", SudokuIcon, onGoToSudoku},
+#endif
 };
 constexpr int kGameCount = static_cast<int>(sizeof(kGames) / sizeof(kGames[0]));
 
@@ -105,4 +120,4 @@ void GamesMenuActivity::loop() {
   }
 }
 
-#endif  // INX_HAS_GAMES
+#endif  // INX_HAS_GAMES || INX_HAS_PUZZLES

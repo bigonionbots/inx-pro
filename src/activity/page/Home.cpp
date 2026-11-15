@@ -37,7 +37,7 @@ extern void onGoToAudiobooks();
 /** Plays the audiobook at this index of the recent list and opens the player. */
 extern void onPlayRecentAudiobook(int index);
 #endif
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
 extern void onGoToGames();
 #endif
 
@@ -472,9 +472,13 @@ bool Home::handleShortcut(const int item) {
       onGoToAudiobooks();
       return true;
 #endif
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
     // After Audiobooks when that shortcut exists (ShortcutList order).
-    case 5 + (INX_HAS_AUDIO_MODULE ? 1 : 0):
+#if INX_HAS_AUDIO_MODULE
+    case 6:
+#else
+    case 5:
+#endif
       onGoToGames();
       return true;
 #endif

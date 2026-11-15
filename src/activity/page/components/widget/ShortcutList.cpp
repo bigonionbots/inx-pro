@@ -11,7 +11,7 @@
 #if INX_HAS_AUDIO_MODULE
 #include "images/Headphones.h"
 #endif
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
 #include "images/Gamepad.h"
 #endif
 #include "images/HighlightIcon.h"
@@ -33,7 +33,7 @@ constexpr ShortcutItem kItems[] = {
 #if INX_HAS_AUDIO_MODULE
     {"Audiobooks", Headphones},
 #endif
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
     {"Games", Gamepad},
 #endif
 };

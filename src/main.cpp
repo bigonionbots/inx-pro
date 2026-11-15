@@ -49,8 +49,11 @@
 #include "activity/settings/GamesActivity.h"
 #include "games/GameMode.h"
 #endif
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
 #include "activity/settings/GamesMenuActivity.h"
+#endif
+#if INX_HAS_PUZZLES
+#include "activity/settings/SudokuActivity.h"
 #endif
 #if INX_HAS_AUDIO_MODULE
 #include "abs/AbsClient.h"
@@ -282,7 +285,7 @@ void onGoToHeatmapReport(const HomeTheme::HeatmapView view) {
   switchTo<HeatmapReport>(render, input, view, [] { onGoToHome(); });
 }
 
-#if INX_HAS_GAMES
+#if INX_HAS_GAMES || INX_HAS_PUZZLES
 /** The Games menu (Apps, Home's shortcut): each game opens from it and comes back to it. */
 void onGoToGames() {
   switchTo<GamesMenuActivity>(render, input, [] { onGoToHome(); });
@@ -292,6 +295,12 @@ void onGoToGames() {
 #if INX_HAS_GAMES
 void onGoToGameBoy() {
   switchTo<GamesActivity>(render, input, [] { onGoToGames(); });
+}
+#endif
+
+#if INX_HAS_PUZZLES
+void onGoToSudoku() {
+  switchTo<SudokuActivity>(render, input, [] { onGoToGames(); });
 }
 #endif
 
