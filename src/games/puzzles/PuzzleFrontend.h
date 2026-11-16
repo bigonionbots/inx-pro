@@ -40,6 +40,8 @@ class PuzzleFrontend {
   bool setParams(const std::string& encoded);
   /** The current game's parameters, in full (Sudoku: size, symmetry and difficulty letters). */
   std::string params() const;
+  /** `encoded` filled out with the puzzle's defaults, in the same full form as params() (to compare). */
+  std::string canonicalParams(const std::string& encoded) const;
 
   /** Generates a new puzzle with the current parameters (can take a second or two on the S3). */
   void newGame();

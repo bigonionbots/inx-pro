@@ -180,6 +180,16 @@ std::string PuzzleFrontend::params() const {
   return result;
 }
 
+std::string PuzzleFrontend::canonicalParams(const std::string& encoded) const {
+  game_params* p = puzzle.default_params();
+  puzzle.decode_params(p, encoded.c_str());
+  char* text = puzzle.encode_params(p, true);
+  std::string result = text;
+  sfree(text);
+  puzzle.free_params(p);
+  return result;
+}
+
 void PuzzleFrontend::newGame() {
   midend_new_game(me);
   loadPalette();

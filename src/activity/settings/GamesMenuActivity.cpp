@@ -19,6 +19,7 @@
 #include "images/Gamepad.h"
 #endif
 #if INX_HAS_PUZZLES
+#include "games/puzzles/PuzzleGames.h"
 #include "images/Sudoku.h"
 #endif
 
@@ -26,7 +27,7 @@
 extern void onGoToGameBoy();
 #endif
 #if INX_HAS_PUZZLES
-extern void onGoToSudoku();
+extern void onGoToPuzzle(const PuzzleGame& game);
 #endif
 
 namespace {
@@ -43,7 +44,7 @@ constexpr GameItem kGames[] = {
     {"Game Boy", "Play Game Boy and Game Boy Color games", Gamepad, onGoToGameBoy},
 #endif
 #if INX_HAS_PUZZLES
-    {"Sudoku", "Number puzzles, from beginner to expert", SudokuIcon, onGoToSudoku},
+    {"Sudoku", "Number puzzles, from beginner to expert", SudokuIcon, [] { onGoToPuzzle(PuzzleGames::SUDOKU); }},
 #endif
 };
 constexpr int kGameCount = static_cast<int>(sizeof(kGames) / sizeof(kGames[0]));

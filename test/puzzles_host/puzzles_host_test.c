@@ -1,11 +1,13 @@
 /**
- * @file solo_host_test.c
- * @brief Host check of the vendored puzzle core (third_party/puzzles) with Solo (Sudoku).
+ * @file puzzles_host_test.c
+ * @brief Host check of the vendored puzzle core (third_party/puzzles) and the puzzles the
+ *        firmware offers: Solo (Sudoku).
  *
  * Builds the same wrapper files the firmware does, with a minimal grey raster front end. For each
- * difficulty the firmware offers it generates puzzles and reports how long that took, then plays
- * a move, saves and restores the game, solves it, and checks that the midend reports it solved.
- * The last board is written as a PGM image (argv[1]) to check the drawing by eye.
+ * level the firmware offers (src/games/puzzles/PuzzleGames.cpp) it generates puzzles and reports
+ * how long that took. Then, per puzzle, it saves and restores a game, solves it and checks that
+ * the midend reports it solved; Sudoku also plays a move first. Each last board is written as a
+ * PGM image (<prefix>-<puzzle>.pgm, prefix argv[1]) to check the drawing by eye.
  */
 
 #include <stdarg.h>
@@ -201,86 +203,129 @@ static double now(void) {
   return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
-int main(int argc, char** argv) {
-  /* The difficulties the firmware offers (SudokuActivity), as Solo's parameter strings. */
-  const char* levels[] = {"3x3dt", "3x3db", "3x3di", "3x3da", "3x3de"};
-  const char* names[] = {"Beginner", "Easy", "Medium", "Hard", "Expert"};
-  const int rounds = 5;
-  int failures = 0;
+struct level {
+  const char* name;
+  const char* params;
+};
+struct puzzle {
+  const char* name;
+  const game* g;
+  struct level levels[6];
+};
 
-  midend* me = NULL;
-  for (int l = 0; l < 5; l++) {
-    double worst = 0, total = 0;
-    for (int r = 0; r < rounds; r++) {
-      if (me) midend_free(me);
-      me = midend_new(NULL, &solo, &api, NULL);
-      game_params* params = solo.default_params();
-      solo.decode_params(params, levels[l]);
-      midend_set_params(me, params);
-      solo.free_params(params);
-      double t = now();
-      midend_new_game(me);
-      double took = now() - t;
-      total += took;
-      if (took > worst) worst = took;
-    }
-    printf("%-9s %s: %.1f ms average, %.1f ms worst (%d puzzles)\n", names[l], levels[l], 1000 * total / rounds,
-           1000 * worst, rounds);
-  }
+/* Kept in step with the levels in src/games/puzzles/PuzzleGames.cpp. */
+static const struct puzzle puzzles[] = {
+    {"sudoku",
+     &solo,
+     {{"Beginner", "3x3dt"}, {"Easy", "3x3db"}, {"Medium", "3x3di"}, {"Hard", "3x3da"}, {"Expert", "3x3de"}}},
+};
 
-  /* Draw, select a cell and enter a digit, then save and restore. */
+static midend* newGame(const game* g, const char* encoded) {
+  midend* me = midend_new(NULL, g, &api, NULL);
+  game_params* params = g->default_params();
+  g->decode_params(params, encoded);
+  const char* bad = g->validate_params(params, true);
+  if (bad) printf("FAIL: %s %s: %s\n", g->name, encoded, bad);
+  midend_set_params(me, params);
+  g->free_params(params);
+  midend_new_game(me);
+  return me;
+}
+
+/* Draws the board into pixels (and loads the palette the drawing uses). */
+static int draw(midend* me) {
   int w = W, h = H;
   midend_size(me, &w, &h, true, 1.0);
+  sfree(palette);
   palette = midend_colours(me, &ncolours);
   memset(pixels, 255, sizeof(pixels));
+  clipX0 = clipY0 = 0;
+  clipX1 = W;
+  clipY1 = H;
   midend_force_redraw(me);
+  return w;
+}
+
+/* Sudoku: select the first empty cell and type 5; that must make a move. */
+static bool sudokuMove(midend* me, int w) {
   int tile = w / 9;
   for (int y = 0; y < 9; y++) {
     for (int x = 0; x < 9; x++) {
-      /* the first empty cell: clicking it and typing 5 must make a move */
       midend_process_key(me, x * tile + tile / 2, y * tile + tile / 2, LEFT_BUTTON);
       midend_process_key(me, x * tile + tile / 2, y * tile + tile / 2, LEFT_RELEASE);
-      if (midend_process_key(me, 0, 0, '5') && midend_can_undo(me)) goto moved;
+      if (midend_process_key(me, 0, 0, '5') && midend_can_undo(me)) return true;
     }
   }
-  printf("FAIL: no cell took a digit\n");
-  failures++;
-moved:;
-  struct buf saved = {0};
-  midend_serialise(me, writeBuf, &saved);
-  char* idBefore = midend_get_game_id(me);
-  midend* restored = midend_new(NULL, &solo, &api, NULL);
-  struct reader rd = {&saved, 0};
-  const char* err = midend_deserialise(restored, readBuf, &rd);
-  char* idAfter = midend_get_game_id(restored);
-  if (err || strcmp(idBefore, idAfter) != 0 || !midend_can_undo(restored)) {
-    printf("FAIL: save and restore (%s)\n", err ? err : "different game or lost the move");
-    failures++;
-  } else {
-    printf("save and restore: %d bytes, same game, move kept\n", saved.len);
-  }
+  return false;
+}
 
-  /* Solve: the midend must report the puzzle completed. */
-  err = midend_solve(restored);
-  if (err || midend_status(restored) != 1) {
-    printf("FAIL: solve (%s, status %d)\n", err ? err : "no error", midend_status(restored));
-    failures++;
-  } else {
-    printf("solve: completed\n");
-  }
+int main(int argc, char** argv) {
+  const int rounds = 5;
+  int failures = 0;
 
-  if (argc > 1) {
-    FILE* f = fopen(argv[1], "wb");
-    fprintf(f, "P5\n%d %d\n255\n", W, H);
-    fwrite(pixels, 1, sizeof(pixels), f);
-    fclose(f);
+  for (size_t p = 0; p < sizeof(puzzles) / sizeof(puzzles[0]); p++) {
+    const struct puzzle* pz = &puzzles[p];
+    midend* me = NULL;
+    for (int l = 0; l < 6 && pz->levels[l].name; l++) {
+      double worst = 0, total = 0;
+      for (int r = 0; r < rounds; r++) {
+        if (me) midend_free(me);
+        double t = now();
+        me = newGame(pz->g, pz->levels[l].params);
+        double took = now() - t;
+        total += took;
+        if (took > worst) worst = took;
+      }
+      printf("%-7s %-9s %-6s %7.1f ms average, %7.1f ms worst (%d puzzles)\n", pz->name, pz->levels[l].name,
+             pz->levels[l].params, 1000 * total / rounds, 1000 * worst, rounds);
+    }
+
+    int w = draw(me);
+    if (pz->g == &solo && !sudokuMove(me, w)) {
+      printf("FAIL: sudoku: no cell took a digit\n");
+      failures++;
+    }
+
+    struct buf saved = {0};
+    midend_serialise(me, writeBuf, &saved);
+    char* idBefore = midend_get_game_id(me);
+    midend* restored = midend_new(NULL, pz->g, &api, NULL);
+    struct reader rd = {&saved, 0};
+    const char* err = midend_deserialise(restored, readBuf, &rd);
+    char* idAfter = midend_get_game_id(restored);
+    if (err || strcmp(idBefore, idAfter) != 0 || (pz->g == &solo && !midend_can_undo(restored))) {
+      printf("FAIL: %s: save and restore (%s)\n", pz->name, err ? err : "different game or lost the move");
+      failures++;
+    } else {
+      printf("%s: save and restore, %d bytes\n", pz->name, saved.len);
+    }
+
+    err = midend_solve(restored);
+    if (err || midend_status(restored) != 1) {
+      printf("FAIL: %s: solve (%s, status %d)\n", pz->name, err ? err : "no error", midend_status(restored));
+      failures++;
+    } else {
+      printf("%s: solve completed\n", pz->name);
+    }
+
+    if (argc > 1) {
+      draw(restored);
+      char path[512];
+      snprintf(path, sizeof(path), "%s-%s.pgm", argv[1], pz->name);
+      FILE* f = fopen(path, "wb");
+      if (f) {
+        fprintf(f, "P5\n%d %d\n255\n", W, H);
+        fwrite(pixels, 1, sizeof(pixels), f);
+        fclose(f);
+      }
+    }
+    sfree(idBefore);
+    sfree(idAfter);
+    free(saved.data);
+    midend_free(restored);
+    midend_free(me);
   }
-  sfree(idBefore);
-  sfree(idAfter);
-  free(saved.data);
   sfree(palette);
-  midend_free(restored);
-  midend_free(me);
   printf(failures ? "FAILED\n" : "OK\n");
   return failures ? 1 : 0;
 }

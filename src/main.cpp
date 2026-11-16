@@ -53,7 +53,7 @@
 #include "activity/settings/GamesMenuActivity.h"
 #endif
 #if INX_HAS_PUZZLES
-#include "activity/settings/SudokuActivity.h"
+#include "activity/settings/PuzzleActivity.h"
 #endif
 #if INX_HAS_AUDIO_MODULE
 #include "abs/AbsClient.h"
@@ -299,8 +299,9 @@ void onGoToGameBoy() {
 #endif
 
 #if INX_HAS_PUZZLES
-void onGoToSudoku() {
-  switchTo<SudokuActivity>(render, input, [] { onGoToGames(); });
+/** A puzzle from the collection (PuzzleGames.h); back returns to the Games menu. */
+void onGoToPuzzle(const PuzzleGame& game) {
+  switchTo<PuzzleActivity>(render, input, game, [] { onGoToGames(); });
 }
 #endif
 

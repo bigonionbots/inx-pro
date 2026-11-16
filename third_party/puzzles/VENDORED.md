@@ -19,7 +19,9 @@ name (`solo`) instead of `thegame` and more can be added side by side.
 
 `src/games/puzzles/Puzzle*.c` each include one of these files (one translation unit per file, as
 upstream builds them), behind `INX_HAS_PUZZLES`. The front end, the drawing and input glue for
-the e-paper UI, is `src/games/puzzles/PuzzleFrontend.cpp`. `test/run_puzzles_host_test.sh`
+the e-paper UI, is `src/games/puzzles/PuzzleFrontend.cpp`; each puzzle's levels and controls are
+in `src/games/puzzles/PuzzleGames.cpp`, and the screen that plays them is
+`src/activity/settings/PuzzleActivity.cpp`. `test/run_puzzles_host_test.sh`
 builds the same files on the host.
 
 ## Updating
