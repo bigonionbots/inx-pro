@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Host check of the vendored puzzle core (third_party/puzzles) through the firmware's own wrapper
-# files: Sudoku generate puzzles at every level the firmware offers (times are
+# files: Sudoku and Pattern generate puzzles at every level the firmware offers (times are
 # printed; the ESP32-S3 is roughly 10-20x slower), then save/restore and solve must work.
 # Writes build/puzzles_host/board-<puzzle>.pgm, each last board, to check the drawing by eye.
 set -euo pipefail

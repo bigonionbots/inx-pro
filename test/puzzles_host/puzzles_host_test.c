@@ -1,7 +1,7 @@
 /**
  * @file puzzles_host_test.c
  * @brief Host check of the vendored puzzle core (third_party/puzzles) and the puzzles the
- *        firmware offers: Solo (Sudoku).
+ *        firmware offers: Solo (Sudoku) and Pattern.
  *
  * Builds the same wrapper files the firmware does, with a minimal grey raster front end. For each
  * level the firmware offers (src/games/puzzles/PuzzleGames.cpp) it generates puzzles and reports
@@ -218,6 +218,7 @@ static const struct puzzle puzzles[] = {
     {"sudoku",
      &solo,
      {{"Beginner", "3x3dt"}, {"Easy", "3x3db"}, {"Medium", "3x3di"}, {"Hard", "3x3da"}, {"Expert", "3x3de"}}},
+    {"pattern", &pattern, {{"5x5", "5x5"}, {"10x10", "10x10"}, {"15x15", "15x15"}}},
 };
 
 static midend* newGame(const game* g, const char* encoded) {

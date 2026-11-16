@@ -23,6 +23,13 @@ constexpr PuzzleLevel SUDOKU_LEVELS[] = {
     {"Hard", "3x3da", 9},     {"Expert", "3x3de", 9},
 };
 
+/** Pattern's parameters: width x height. 15x15 is about the smallest cell a finger can hit on the T5. */
+constexpr PuzzleLevel PATTERN_LEVELS[] = {
+    {"5x5", "5x5", 0},
+    {"10x10", "10x10", 0},
+    {"15x15", "15x15", 0},
+};
+
 template <size_t N>
 constexpr uint8_t count(const PuzzleLevel (&)[N]) {
   static_assert(N <= PuzzleGame::MAX_LEVELS, "PuzzleActivity keeps a tally for at most MAX_LEVELS levels");
@@ -45,6 +52,20 @@ const PuzzleGame SUDOKU = {
     "Notes",
     "Notes on: digits go in as pencil marks",
     true,
+};
+
+const PuzzleGame PATTERN = {
+    "Pattern",
+    &pattern,
+    "/.system/pattern.sav",
+    "/.system/pattern-solved.txt",
+    PATTERN_LEVELS,
+    count(PATTERN_LEVELS),
+    1,  // 10x10
+    "New puzzle: choose a size",
+    "Cross",
+    "Cross on: taps mark squares as empty",
+    false,
 };
 
 }  // namespace PuzzleGames

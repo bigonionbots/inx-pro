@@ -20,6 +20,7 @@
 #endif
 #if INX_HAS_PUZZLES
 #include "games/puzzles/PuzzleGames.h"
+#include "images/Pattern.h"
 #include "images/Sudoku.h"
 #endif
 
@@ -45,6 +46,7 @@ constexpr GameItem kGames[] = {
 #endif
 #if INX_HAS_PUZZLES
     {"Sudoku", "Number puzzles, from beginner to expert", SudokuIcon, [] { onGoToPuzzle(PuzzleGames::SUDOKU); }},
+    {"Pattern", "Nonograms: shade the picture from the clues", PatternIcon, [] { onGoToPuzzle(PuzzleGames::PATTERN); }},
 #endif
 };
 constexpr int kGameCount = static_cast<int>(sizeof(kGames) / sizeof(kGames[0]));

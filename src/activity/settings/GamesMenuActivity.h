@@ -4,7 +4,7 @@
  * @file GamesMenuActivity.h
  * @brief The Games menu (Apps -> Games, Home's Games shortcut): one row per game this build has.
  *
- * Game Boy (the ROM list, GamesActivity; t5s3_audio only) and the puzzles Sudoku
+ * Game Boy (the ROM list, GamesActivity; t5s3_audio only) and the puzzles Sudoku and Pattern
  * (PuzzleActivity; every device). Each opens full screen and comes back here; Back here goes Home. New games go in
  * kGames in the .cpp.
  */

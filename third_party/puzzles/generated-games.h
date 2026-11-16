@@ -5,3 +5,4 @@
  * GAME(name) line for each puzzle vendored here.
  */
 GAME(solo)
+GAME(pattern)

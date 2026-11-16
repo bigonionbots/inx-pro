@@ -2,7 +2,7 @@
 
 /**
  * @file PuzzleActivity.h
- * @brief One puzzle from the collection (Games -> Sudoku) on the e-paper screen.
+ * @brief One puzzle from the collection (Games -> Sudoku, Pattern) on the e-paper screen.
  *
  * The board fills the middle of the screen. Under it are the digit buttons (puzzles that take
  * digits) and the tools: the mode button (Notes or Cross), Erase (select-then-enter puzzles),

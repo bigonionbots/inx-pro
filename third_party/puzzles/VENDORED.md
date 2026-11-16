@@ -4,8 +4,9 @@ Source: https://git.tartarus.org/simon/puzzles.git at commit `616da16` (2026-09-
 LICENCE).
 
 Kept, unmodified:
-- `solo.c` (Sudoku: generator, solver, difficulty grading, drawing, input)
-- the shared core it needs: `midend.c`, `drawing.c`, `misc.c`, `malloc.c`, `random.c`,
+- the puzzles: `solo.c` (Sudoku) and `pattern.c` (Pattern, nonograms); each has its generator,
+  solver, drawing and input
+- the shared core they need: `midend.c`, `drawing.c`, `misc.c`, `malloc.c`, `random.c`,
   `divvy.c`, `dsf.c`, `version.c`, `version.h`, `puzzles.h`
 
 Not kept: the other puzzles, the desktop and web front ends, printing (`ps.c`), the build
@@ -13,7 +14,7 @@ system, documentation and icons.
 
 inx-pro's own file here: `generated-games.h`, the list of puzzles that upstream's build
 generates. Every file is compiled with `COMBINED` defined, so each puzzle links under its own
-name (`solo`) instead of `thegame` and more can be added side by side.
+name (`solo`, `pattern`) instead of `thegame` and more can be added side by side.
 
 ## How it is built
 
