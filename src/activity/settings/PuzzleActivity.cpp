@@ -193,7 +193,7 @@ void PuzzleActivity::renderPad() {
   int y = padY;
   const int digits = digitCount();
   if (digits > 0) {
-    // Sized for nine, so a small grid's few buttons are not stretched across the screen; centred.
+    // Sized for nine, so a 4x4 Keen's four buttons are not stretched across the screen; centred.
     const int digitW = (inner - 8 * GAP) / 9;
     const int left = MARGIN + (inner - (digits * digitW + (digits - 1) * GAP)) / 2;
     for (int d = 1; d <= digits; ++d) {
@@ -323,7 +323,7 @@ void PuzzleActivity::run(const Action action, const int value) {
       return;
     case Action::Mode:
       mode = !mode;
-      // A selected cell switches to the new mode (Solo: right click selects for pencil
+      // A selected cell switches to the new mode (Solo, Keen: right click selects for pencil
       // marks). In a tap-to-set puzzle that tap would change the cell, so not there.
       if (spec.selectsCells && hasLastTap) puzzle->tap(lastTapX, lastTapY, mode);
       renderStatus();

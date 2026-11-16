@@ -30,6 +30,12 @@ constexpr PuzzleLevel PATTERN_LEVELS[] = {
     {"15x15", "15x15", 0},
 };
 
+/** Keen's parameters: grid size, `d` + difficulty letter (easy, normal, hard, extreme). */
+constexpr PuzzleLevel KEEN_LEVELS[] = {
+    {"Beginner 4x4", "4de", 4}, {"Easy 5x5", "5de", 5},   {"Medium 6x6", "6dn", 6},
+    {"Hard 6x6", "6dh", 6},     {"Expert 7x7", "7dx", 7},
+};
+
 template <size_t N>
 constexpr uint8_t count(const PuzzleLevel (&)[N]) {
   static_assert(N <= PuzzleGame::MAX_LEVELS, "PuzzleActivity keeps a tally for at most MAX_LEVELS levels");
@@ -66,6 +72,20 @@ const PuzzleGame PATTERN = {
     "Cross",
     "Cross on: taps mark squares as empty",
     false,
+};
+
+const PuzzleGame KEEN = {
+    "Keen",
+    &keen,
+    "/.system/keen.sav",
+    "/.system/keen-solved.txt",
+    KEEN_LEVELS,
+    count(KEEN_LEVELS),
+    1,  // Easy 5x5
+    "New puzzle: choose a difficulty",
+    "Notes",
+    "Notes on: digits go in as pencil marks",
+    true,
 };
 
 }  // namespace PuzzleGames

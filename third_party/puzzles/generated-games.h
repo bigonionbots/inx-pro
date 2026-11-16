@@ -6,3 +6,4 @@
  */
 GAME(solo)
 GAME(pattern)
+GAME(keen)

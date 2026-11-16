@@ -6,7 +6,7 @@
  *        is played on the e-paper screen (PuzzleActivity).
  *
  * Two kinds of input cover them:
- * - Select, then enter (Sudoku): a tap selects a cell, then a digit on the pad fills it.
+ * - Select, then enter (Sudoku, Keen): a tap selects a cell, then a digit on the pad fills it.
  *   The mode button (Notes) makes the tap select for pencil marks instead (the collection's right
  *   click).
  * - Tap to set (Pattern): a tap fills the cell, a second tap clears it. The mode button (Cross)
@@ -47,6 +47,7 @@ struct PuzzleGame {
 namespace PuzzleGames {
 extern const PuzzleGame SUDOKU;
 extern const PuzzleGame PATTERN;
+extern const PuzzleGame KEEN;
 }  // namespace PuzzleGames
 
 #endif  // INX_HAS_PUZZLES

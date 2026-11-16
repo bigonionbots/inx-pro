@@ -60,7 +60,7 @@ constexpr AppItem kMenuItems[] = {
 #if INX_HAS_GAMES
     {"Games", "Game Boy and logic puzzles", Gamepad},
 #else
-    {"Games", "Sudoku and Pattern", Gamepad},
+    {"Games", "Sudoku, Pattern and Keen", Gamepad},
 #endif
 #endif
 };
