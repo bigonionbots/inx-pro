@@ -14,6 +14,7 @@
 #include <freertos/stream_buffer.h>
 #include <freertos/task.h>
 #include <usb/cdc_acm_host.h>
+#include <usb/usb_helpers.h>
 #include <usb/usb_host.h>
 #include <usb/vcp_ch34x.h>
 #include <usb/vcp_cp210x.h>
@@ -23,6 +24,7 @@
 #include <cstring>
 
 #include "AudioModule.h"
+#include "UsbAudioOut.h"
 
 namespace UsbSerialHost {
 
@@ -91,10 +93,24 @@ void copyStringDescriptor(const usb_str_desc_t* desc, char* out, const size_t ou
   out[written] = '\0';
 }
 
+/** USB headphone adapters belong to the UAC driver (UsbAudioOut), not to a serial driver. */
+bool hasAudioInterface(usb_device_handle_t usbDev) {
+  const usb_config_desc_t* config = nullptr;
+  if (usb_host_get_active_config_descriptor(usbDev, &config) != ESP_OK || !config) return false;
+  int offset = 0;
+  const auto* desc = reinterpret_cast<const usb_standard_desc_t*>(config);
+  while ((
+      desc = usb_parse_next_descriptor_of_type(desc, config->wTotalLength, USB_B_DESCRIPTOR_TYPE_INTERFACE, &offset))) {
+    if (reinterpret_cast<const usb_intf_desc_t*>(desc)->bInterfaceClass == USB_CLASS_AUDIO) return true;
+  }
+  return false;
+}
+
 // USB Host context: read the descriptors, then let the connect task open the device.
 void onNewDevice(usb_device_handle_t usbDev) {
   const usb_device_desc_t* desc = nullptr;
   if (usb_host_get_device_descriptor(usbDev, &desc) != ESP_OK || !desc) return;
+  if (hasAudioInterface(usbDev)) return;
   usb_device_info_t info{};
   DeviceInfo found;
   found.vid = desc->idVendor;
@@ -354,6 +370,9 @@ bool start(const uint32_t baud) {
     return false;
   }
 
+  // A second client on the same stack, registered before the port powers up like the CDC one.
+  UsbAudioOut::install();
+
   currentState = State::Waiting;
   err = usb_host_lib_set_root_port_power(true);
   if (err != ESP_OK) AudioModule::logf("USB: root port power failed: %s", esp_err_to_name(err));
@@ -373,6 +392,8 @@ void stop() {
       deleteStoppedTask(connectTask);
     }
   }
+
+  UsbAudioOut::uninstall();
 
   // Deregistering the CDC client wakes the host task with NO_CLIENTS; unblock covers a failed
   // start() where the client never registered. The task then frees the devices and exits.

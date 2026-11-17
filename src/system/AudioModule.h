@@ -11,7 +11,8 @@
  * Power rules:
  * - The boost is never turned on while something else drives VBUS (charger, PC, or a module
  *   with its own battery). The link works without the boost in that case.
- * - The boost goes off when the link is on but no bridge has been connected for NO_DEVICE_POWER_OFF_MS
+ * - The boost goes off when the link is on but neither a bridge nor a USB headphone adapter
+ *   (UsbAudioOut.h) has been connected for NO_DEVICE_POWER_OFF_MS
  *   (LINK_OFF_POWER_OFF_MS while the link is off, since no module can be detected then), on a boost
  *   fault, and before deep sleep.
  *
@@ -26,6 +27,7 @@
 #include <vector>
 
 #include "Bq25896.h"
+#include "UsbAudioOut.h"
 #include "UsbSerialHost.h"
 
 #ifndef INX_AUDIO_MODULE_BAUD
@@ -79,6 +81,9 @@ struct Snapshot {
   UsbSerialHost::State linkState = UsbSerialHost::State::Stopped;
   UsbSerialHost::DeviceInfo device;
   UsbSerialHost::Counters counters;
+  UsbAudioOut::State headphonesState = UsbAudioOut::State::Off;
+  UsbAudioOut::DeviceInfo headphones;
+  UsbAudioOut::Counters headphoneCounters;
   LinkTestResult link;
   GaugeReading gauge;
 };

@@ -13,8 +13,9 @@
 
 /**
  * Audio module bench screen, reached from Device Management -> Audio Module. Switches the USB-C
- * OTG boost and the USB host link, runs an echo test against the module, and shows the charger
- * status, the connected bridge (VID:PID, driver), traffic counters, and the module log. While the
+ * OTG boost and the USB host link, runs an echo test against the module, plays a test tone through a
+ * USB headphone adapter (UsbAudioOut.h), and shows the charger status, the connected bridge (VID:PID,
+ * driver) or adapter (formats), traffic counters, and the module log. While the
  * USB link is on the USB console is gone, so this screen is where the diagnostics go.
  */
 class AudioModuleActivity final : public Activity {

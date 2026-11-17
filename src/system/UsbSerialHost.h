@@ -14,6 +14,9 @@
  * and holds DTR and RTS deasserted so the ESP32 auto-reset circuit on the module neither resets it
  * nor puts it in its bootloader. Received bytes land in a stream buffer for read(). Unplugging and
  * replugging is handled: the task closes the device and waits for the next one.
+ *
+ * USB headphone adapters (audio class) are left to UsbAudioOut, whose UAC driver start() registers
+ * on the same stack.
  */
 
 #if INX_HAS_AUDIO_MODULE

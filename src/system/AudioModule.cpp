@@ -224,7 +224,7 @@ void service() {
   if (powerOn) {
     // With the link off the module cannot be seen, so only a long idle limit applies.
     const uint32_t limit = linkOn ? NO_DEVICE_POWER_OFF_MS : LINK_OFF_POWER_OFF_MS;
-    if (UsbSerialHost::isConnected()) {
+    if (UsbSerialHost::isConnected() || UsbAudioOut::isConnected()) {
       noDeviceSinceMs = 0;
     } else if (noDeviceSinceMs == 0) {
       noDeviceSinceMs = now;
@@ -394,6 +394,9 @@ Snapshot snapshot() {
   out.linkState = UsbSerialHost::state();
   out.device = UsbSerialHost::device();
   out.counters = UsbSerialHost::counters();
+  out.headphonesState = UsbAudioOut::state();
+  out.headphones = UsbAudioOut::device();
+  out.headphoneCounters = UsbAudioOut::counters();
   out.link = lastLink;
   out.gauge = gauge;
   return out;

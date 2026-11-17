@@ -21,7 +21,7 @@
 
 namespace {
 
-constexpr int ACTION_COUNT = 4;
+constexpr int ACTION_COUNT = 5;
 constexpr int ROW_HEIGHT = UiLayout::LIST_ITEM_HEIGHT;
 constexpr unsigned long MIN_REDRAW_MS = 1000;
 
@@ -35,6 +35,22 @@ const char* linkStateName(const UsbSerialHost::State state) {
       return "connected";
     case UsbSerialHost::State::Failed:
       return "failed (see log)";
+  }
+  return "?";
+}
+
+const char* headphonesStateName(const UsbAudioOut::State state) {
+  switch (state) {
+    case UsbAudioOut::State::Off:
+      return "off (USB link off)";
+    case UsbAudioOut::State::Waiting:
+      return "no adapter";
+    case UsbAudioOut::State::Ready:
+      return "ready";
+    case UsbAudioOut::State::Playing:
+      return "playing";
+    case UsbAudioOut::State::Failed:
+      return "driver failed (see log)";
   }
   return "?";
 }
@@ -106,6 +122,11 @@ void AudioModuleActivity::runAction(const int index) {
       AudioModule::runLinkTest();
       break;
     case 3:
+      if (!UsbAudioOut::playTestTone()) {
+        AudioModule::logf("Headphones: %s", UsbAudioOut::isConnected() ? "already playing" : "no adapter connected");
+      }
+      break;
+    case 4:
       if (AudioModule::saveLog()) {
         AudioModule::logf("Log saved to %s", AudioModule::LOG_FILE);
       } else {
@@ -131,8 +152,9 @@ void AudioModuleActivity::render() {
   const int font = systemFontId();
   constexpr int smallFont = MONTSERRAT_8_FONT_ID;
 
-  const char* labels[ACTION_COUNT] = {"Module power", "USB link", "Link test", "Save log to SD card"};
-  const char* values[ACTION_COUNT] = {snap.powerOn ? "On" : "Off", snap.linkOn ? "On" : "Off", "›", "›"};
+  const char* labels[ACTION_COUNT] = {"Module power", "USB link", "Link test", "Headphone test tone",
+                                      "Save log to SD card"};
+  const char* values[ACTION_COUNT] = {snap.powerOn ? "On" : "Off", snap.linkOn ? "On" : "Off", "›", "›", "›"};
   for (int i = 0; i < ACTION_COUNT; ++i) {
     const int rowY = actionsTop + i * ROW_HEIGHT;
     const bool selected = selectedVisible && i == selectedIndex;
@@ -171,6 +193,19 @@ void AudioModuleActivity::render() {
     snprintf(device, sizeof(device), "%s", linkStateName(snap.linkState));
   }
 
+  char headphones[128];
+  if (snap.headphonesState == UsbAudioOut::State::Ready || snap.headphonesState == UsbAudioOut::State::Playing) {
+    int n = snprintf(headphones, sizeof(headphones), "%04X:%04X %s, %s", snap.headphones.vid, snap.headphones.pid,
+                     snap.headphones.formats, headphonesStateName(snap.headphonesState));
+    if (snap.headphoneCounters.tones > 0 && n < static_cast<int>(sizeof(headphones))) {
+      snprintf(headphones + n, sizeof(headphones) - n, ", last tone %lu B in %lu ms",
+               static_cast<unsigned long>(snap.headphoneCounters.lastToneBytes),
+               static_cast<unsigned long>(snap.headphoneCounters.lastToneMs));
+    }
+  } else {
+    snprintf(headphones, sizeof(headphones), "%s", headphonesStateName(snap.headphonesState));
+  }
+
   char traffic[96];
   snprintf(traffic, sizeof(traffic), "rx %lu  tx %lu  dropped %lu  line err %lu  plugs %lu/%lu",
            static_cast<unsigned long>(snap.counters.rxBytes), static_cast<unsigned long>(snap.counters.txBytes),
@@ -197,8 +232,9 @@ void AudioModuleActivity::render() {
     const char* label;
     const char* value;
   };
-  const Row rows[] = {{"CHARGER / VBUS", charger}, {"BATTERY", battery},       {"BRIDGE", device},
-                      {"TRAFFIC", traffic},        {"T5 -> MODULE", toModule}, {"MODULE -> T5", fromModule}};
+  const Row rows[] = {{"CHARGER / VBUS", charger}, {"BATTERY", battery}, {"BRIDGE", device},
+                      {"HEADPHONES", headphones},  {"TRAFFIC", traffic}, {"T5 -> MODULE", toModule},
+                      {"MODULE -> T5", fromModule}};
 
   const int valueMaxW = screenWidth - 40;
   int y = actionsTop + ACTION_COUNT * ROW_HEIGHT + 16;
