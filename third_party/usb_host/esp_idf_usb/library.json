@@ -1,0 +1,17 @@
+{
+  "name": "esp_idf_usb",
+  "version": "5.5.2+87912cd291",
+  "description": "ESP-IDF USB Host Library (components/usb, unmodified sources) built with a larger control transfer limit, replacing the framework's prebuilt libusb.a",
+  "license": "Apache-2.0",
+  "platforms": "espressif32",
+  "build": {
+    "srcDir": ".",
+    "srcFilter": [
+      "+<*.c>"
+    ],
+    "flags": [
+      "-Iprivate_include"
+    ],
+    "extraScript": "inx_usb_config.py"
+  }
+}
