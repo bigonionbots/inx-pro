@@ -26,7 +26,9 @@
 
 #include "AudioLink.h"
 #include "AudioModule.h"
+#include "AudioOutput.h"
 #include "ListeningLog.h"
+#include "UsbAudioSink.h"
 #include "abs/AbsClient.h"
 #include "abs/AbsCovers.h"
 #include "abs/AbsLocal.h"
@@ -196,19 +198,19 @@ void senderTask(void*) {
           start.streamId = record.header.streamId;
           start.codec = record.data[0];
           std::memcpy(&start.startMs, record.data + 1, sizeof(start.startMs));
-          sent = AudioLink::send(Type::StreamStart, &start, sizeof(start), 200);
+          sent = AudioOutput::send(Type::StreamStart, &start, sizeof(start), 200);
           break;
         }
         case RecordKind::Data:
-          sent = AudioLink::sendAudio(record.header.streamId, record.data, record.header.length, 200);
+          sent = AudioOutput::sendAudio(record.header.streamId, record.data, record.header.length, 200);
           break;
         case RecordKind::End:
-          sent = AudioLink::send(Type::StreamEnd, &record.header.streamId, 1, 200);
+          sent = AudioOutput::send(Type::StreamEnd, &record.header.streamId, 1, 200);
           break;
       }
       if (sent) break;
       // Module away: hold the record. A new session restarts the stream, which clears the queue.
-      if (!AudioLink::ready()) vTaskDelay(pdMS_TO_TICKS(50));
+      if (!AudioOutput::ready()) vTaskDelay(pdMS_TO_TICKS(50));
     }
   }
 }
@@ -932,7 +934,7 @@ void flushListening() {
 
 /** Counts listening: time the module plays our stream (main loop, every service()). */
 void countListening() {
-  const AudioLink::ModuleStatus module = AudioLink::status();
+  const AudioLink::ModuleStatus module = AudioOutput::status();
   const bool playing = isOpen && !paused && streamActive && module.valid && module.status.streamId == streamId &&
                        static_cast<PlayState>(module.status.playState) == PlayState::Playing;
   if (!playing) {
@@ -1007,7 +1009,7 @@ void requestFetch() {
 }
 
 void sendControl(const Type type, const void* payload = nullptr, const size_t length = 0) {
-  if (AudioLink::ready()) AudioLink::send(type, payload, length, CONTROL_TIMEOUT_MS);
+  if (AudioOutput::ready()) AudioOutput::send(type, payload, length, CONTROL_TIMEOUT_MS);
 }
 
 void stopStream() {
@@ -1185,7 +1187,7 @@ void finishTrack() {
 }
 
 void updateFromModule() {
-  const AudioLink::ModuleStatus module = AudioLink::status();
+  const AudioLink::ModuleStatus module = AudioOutput::status();
   if (!module.valid || !streamActive || module.status.streamId != streamId) return;
   const auto state = static_cast<PlayState>(module.status.playState);
   if (state == PlayState::Idle) return;
@@ -1278,8 +1280,8 @@ bool startBook() {
   lastPushMs = millis();  // the first periodic push comes an interval after the opening fetch
   lastModuleTryMs = 0;
   wakeModule();
-  session = AudioLink::sessionCounter();
-  if (AudioLink::ready()) startStream(saved.ms);
+  session = AudioOutput::sessionCounter();
+  if (AudioOutput::ready()) startStream(saved.ms);
   requestFetch();
   AudioModule::logf("Player: %s%s, track %d/%d at %lu s", book.title.c_str(), remote ? " (streaming)" : "", track + 1,
                     static_cast<int>(tracks.size()), static_cast<unsigned long>(saved.ms / 1000));
@@ -1300,6 +1302,8 @@ void begin() {
   // 4 rx buffer"). A PSRAM-stack task must not exit, and this one never does.
   xTaskCreatePinnedToCoreWithCaps(senderTask, "audio_send", 6144, nullptr, 3, nullptr, tskNO_AFFINITY,
                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  // USB headphones: the module's work done here when an adapter is plugged in instead.
+  UsbAudioSink::begin();
   // The feeder and the sync task start on first use (ensureNetworkTasks()).
 }
 
@@ -1594,7 +1598,7 @@ View view() {
   v.paused = paused;
   v.finished = finished;
   v.remote = remote;
-  v.waitingForModule = isOpen && !AudioLink::ready();
+  v.waitingForModule = isOpen && !AudioOutput::ready();
   v.title = book.title;
   v.trackName = isOpen && track < static_cast<int>(tracks.size()) ? baseName(tracks[track].name) : "";
   v.track = track;
@@ -1616,7 +1620,7 @@ View view() {
   v.queuedBytes = static_cast<uint32_t>(queue.usedBytes());
   v.message = message;
   v.coverPath = isOpen ? coverPath : "";
-  const AudioLink::ModuleStatus module = AudioLink::status();
+  const AudioLink::ModuleStatus module = AudioOutput::status();
   if (module.valid) {
     v.moduleState = static_cast<PlayState>(module.status.playState);
     v.btState = static_cast<audiolink::BtState>(module.status.btState);
@@ -1649,7 +1653,7 @@ void logStreamHealth() {
   const uint32_t bytes = feedBytes.load();
   const AudioLink::Counters link = AudioLink::counters();
   if (lastMs != 0 && now - lastMs >= STREAM_HEALTH_LOG_MS) {
-    const AudioLink::ModuleStatus module = AudioLink::status();
+    const AudioLink::ModuleStatus module = AudioOutput::status();
     AudioModule::logf(
         "Stream: %lu KB/s in, queue %u KB; module %lu KB + %u ms, %u underruns, %u decode errors, %lu KB heap; "
         "%lu opens, %lu drops, %lu block fetches; internal %u KB block, %u KB free (min %u); "
@@ -1681,11 +1685,12 @@ void logStreamHealth() {
 }  // namespace
 
 void service() {
+  UsbAudioSink::service();
   if (!isOpen) return;
   if (!paused && !finished) wakeModule();
 
-  const uint32_t now = AudioLink::sessionCounter();
-  if (now != session && AudioLink::ready()) {
+  const uint32_t now = AudioOutput::sessionCounter();
+  if (now != session && AudioOutput::ready()) {
     // New session: the module (re)connected or rebooted and knows nothing of our stream.
     session = now;
     if (!finished && !wifiParked) startStream(positionMs);

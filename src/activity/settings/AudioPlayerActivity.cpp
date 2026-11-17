@@ -22,6 +22,7 @@
 #include "system/MappedInputManager.h"
 #include "system/ScreenComponents.h"
 #include "system/UiLayout.h"
+#include "system/UsbAudioSink.h"
 #include "util/SdIoMutex.h"
 
 extern void onGoToAudiobookshelf();
@@ -67,6 +68,7 @@ const char* outputName(const audiolink::Output output) {
     case audiolink::Output::Null:
       return "Test (silent)";
   }
+  if (output == UsbAudioSink::USB_HEADPHONES) return "USB headphones";
   return "?";
 }
 
@@ -87,7 +89,7 @@ const char* btStateName(const audiolink::BtState state) {
 }
 
 const char* moduleStateName(const AudioPlayer::View& v) {
-  if (v.waitingForModule) return "Waiting for the audio module...";
+  if (v.waitingForModule) return "Waiting for the audio module or USB headphones...";
   if (v.finished) return "Finished";
   if (v.paused) return "Paused";
   switch (v.moduleState) {
@@ -727,9 +729,17 @@ void AudioPlayerActivity::renderOutput(int y) {
   const int font = systemFontId();
   constexpr int smallFont = MONTSERRAT_10_FONT_ID;
 
+  if (v.output == UsbAudioSink::USB_HEADPHONES) {
+    y = paragraph(font, MARGIN, y, inner, "USB headphones") + GAP;
+    paragraph(smallFont, MARGIN, y, inner,
+              "The book plays through the USB audio adapter on the USB-C port. Unplug it and plug in the audio "
+              "module for Bluetooth or its wired output.");
+    return;
+  }
   if (!module.valid) {
     y = paragraph(font, MARGIN, y, inner, "Waiting for the audio module...") + GAP;
-    paragraph(smallFont, MARGIN, y, inner, "Plug it into the USB-C port.");
+    paragraph(smallFont, MARGIN, y, inner,
+              "Plug it, or a USB audio adapter for wired headphones, into the USB-C port.");
     return;
   }
 

@@ -170,6 +170,30 @@ module plays HE-AAC books as their AAC-LC core, which sounds duller.
 **Licences:** the module firmware's binary is GPL-3.0 (it links libhelix); this firmware links
 none of its libraries, and the protocol headers it copies depend on none of them.
 
+## USB headphones instead of the module
+
+A USB audio adapter (USB Audio Class 1.0) in the T5's USB-C port plays books without the ATOM:
+the T5 decodes and the adapter is the DAC. Tested with a Sabrent AU-UCMA (C-Media `0D8C:0147`:
+full speed, 16/24-bit stereo at 44.1/48/96 kHz). Turn on Module power and USB link as for the
+module (the player does it by itself), then plug the adapter in; the player's output reads
+"USB headphones" and the Audio Module screen's HEADPHONES line shows the adapter and its formats.
+
+| Piece | Role |
+| --- | --- |
+| `third_party/usb_host/esp_idf_usb` | The USB Host Library built from source: the prebuilt one refuses configuration descriptors over 256 bytes, and audio adapters' are longer (the AU-UCMA's is 519). See `third_party/usb_host/README.md`. |
+| `third_party/usb_host/usb_host_uac` | Espressif's UAC 1.0 class driver, registered beside the serial drivers whenever the USB link is on. UAC 2.0-only adapters are not supported. |
+| `src/system/UsbAudioOut.*` | Opens the adapter, logs its formats, picks the rate (`bestRate()`: the source's if the adapter takes it, else 44.1 kHz for the 11.025 kHz family and 48 kHz for the rest), and writes 16-bit stereo PCM. The driver's ~90 ms buffer paces playback. Also the screen's test tone. |
+| `src/system/UsbAudioSink.*` | The module's job on the T5: takes the same host frames and answers with the same STATUS, so the player is unchanged. A task decodes (`src/audio/PcmDecoder.*`: minimp3 for MP3, PacketVideo's decoder from Android for AAC-LC, HE-AAC and HE-AAC v2), converts the rate (`src/audio/Resampler.*`, 16-tap windowed sinc), and writes to the adapter. Volume is the adapter's own, saved in `/.system/headphones.txt`. |
+| `src/system/AudioOutput.*` | Routes the player's calls to the headphones when an adapter is open, else to the module. A switch counts as a new session, so the stream restarts on the new output where it was. |
+
+Decoders: `third_party/minimp3` (CC0, a single header) and `third_party/opencore_aacdec`
+(Apache-2.0, the `pv` decoder of `frameworks/av` at android-4.1.2_r2.1, unmodified; Android
+switched to Fraunhofer's after that release). `test/run_audio_decode_host_test.sh` checks both
+against ffmpeg (MP3 ~96 dB SNR, AAC 45-77 dB) and the resampler at the rate pairs books need.
+
+A playing stream logs how much of real time decoding takes, once a minute
+(`Headphones: decoding takes N% of real time`).
+
 ## Audiobookshelf
 
 Books from an Audiobookshelf server can be streamed through the T5 or downloaded to the SD card.

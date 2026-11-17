@@ -2,7 +2,8 @@
 
 /**
  * @file AudioPlayer.h
- * @brief Audiobook playback from the SD card through the external audio module.
+ * @brief Audiobook playback from the SD card through the external audio module, or through USB
+ *        headphones on the T5's port (AudioOutput.h).
  *
  * A book is an audio file (.m4b / .m4a / .mp4 / .mp3) or a folder of them (played in natural name
  * order) under /Audiobooks, or an Audiobookshelf item streamed over Wi-Fi (openRemote()). Folders
@@ -45,7 +46,7 @@ struct View {
   bool paused = false;
   bool finished = false;
   bool remote = false;  ///< streaming from Audiobookshelf
-  /** Module not connected or not answering yet; playback resumes by itself when it is. */
+  /** Neither the module nor USB headphones ready yet; playback resumes by itself when one is. */
   bool waitingForModule = false;
   std::string title;
   std::string trackName;
