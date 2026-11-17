@@ -1,6 +1,6 @@
 /**
  * @file UsbAudioOut.cpp
- * @brief Definitions for the USB headphone adapter probe.
+ * @brief Definitions for USB headphone adapter output.
  */
 
 #include "UsbAudioOut.h"
@@ -25,23 +25,24 @@ namespace UsbAudioOut {
 
 namespace {
 
-constexpr uint32_t TONE_RATE = 44100;  ///< Books are 44.1 kHz; 48 kHz is the fallback
-constexpr uint32_t FALLBACK_RATE = 48000;
+constexpr uint32_t TONE_RATE = 44100;
 constexpr uint8_t CHANNELS = 2;
 constexpr uint8_t BITS = 16;
 /** About 90 ms of 44.1 kHz stereo in the driver's ring buffer. */
 constexpr uint32_t RING_BYTES = 16 * 1024;
 constexpr uint32_t RING_THRESHOLD = 4 * 1024;
-/** 10 ms per write. */
+/** 10 ms per tone write. */
 constexpr uint32_t CHUNK_FRAMES = 480;
+/** The most one driver write takes: half its buffer, so a write never waits for all of it. */
+constexpr size_t MAX_WRITE_BYTES = RING_BYTES / 2;
 constexpr uint32_t WRITE_TIMEOUT_MS = 200;
 /** Tone segments: left, right, both. */
 constexpr uint32_t SEGMENT_MS = 1000;
 constexpr float TONE_HZ[3] = {440.0f, 660.0f, 550.0f};
 /** -20 dBFS: audible but not loud, whatever the headphones. */
 constexpr float TONE_LEVEL = 0.1f;
-/** Normalised (0-100) across the adapter's own volume range. */
-constexpr uint8_t ADAPTER_VOLUME = 60;
+/** The tone's adapter volume, normalised (0-100) across the adapter's own range. */
+constexpr uint8_t TONE_VOLUME = 60;
 constexpr uint32_t FADE_FRAMES = 441;  ///< 10 ms ramps, so the segments do not click
 
 constexpr UBaseType_t DRIVER_TASK_PRIORITY = 5;  // same as the USB host task
@@ -62,7 +63,14 @@ uint8_t pendingAddr = 0;
 uint8_t pendingIface = 0;
 bool pendingValid = false;
 
-uac_host_device_handle_t handle = nullptr;  // audio task only
+/** Guards handle and the stream state: the stream calls come from other tasks. */
+SemaphoreHandle_t ioLock = nullptr;
+uac_host_device_handle_t handle = nullptr;
+/** Written under ioLock, read without it (status polling must not wait behind a write). */
+std::atomic<uint32_t> runningRate{0};
+uint8_t volumePercent = 50;
+bool toneRunning = false;
+std::atomic<uint32_t> opens{0};
 TaskHandle_t audioTask = nullptr;
 SemaphoreHandle_t audioDone = nullptr;
 bool driverInstalled = false;
@@ -81,6 +89,14 @@ class LockGuard {
   ~LockGuard() { xSemaphoreGive(lock); }
   LockGuard(const LockGuard&) = delete;
   LockGuard& operator=(const LockGuard&) = delete;
+};
+
+class IoGuard {
+ public:
+  IoGuard() { xSemaphoreTake(ioLock, portMAX_DELAY); }
+  ~IoGuard() { xSemaphoreGive(ioLock); }
+  IoGuard(const IoGuard&) = delete;
+  IoGuard& operator=(const IoGuard&) = delete;
 };
 
 void copyWide(const wchar_t* in, char* out, const size_t outSize) {
@@ -121,8 +137,10 @@ void onDeviceEvent(uac_host_device_handle_t, const uac_host_device_event_t event
   }
 }
 
-/** Logs every output alternate setting and keeps a one-line summary for the screen. */
-void describeFormats(const uint8_t altCount, char* summary, const size_t summarySize) {
+/** Logs every output alternate setting, keeps a one-line summary and the 16-bit stereo rates. */
+void describeFormats(const uint8_t altCount, DeviceInfo& dev) {
+  char* summary = dev.formats;
+  const size_t summarySize = sizeof(dev.formats);
   bool bits16 = false;
   bool bits24 = false;
   uint8_t channels = 0;
@@ -145,6 +163,9 @@ void describeFormats(const uint8_t altCount, char* summary, const size_t summary
         bool known = false;
         for (size_t r = 0; r < rateCount; ++r) known = known || rates[r] == param.sample_freq[i];
         if (!known && rateCount < 8) rates[rateCount++] = param.sample_freq[i];
+        if (param.channels == CHANNELS && param.bit_resolution == BITS && dev.rateCount < 8) {
+          dev.rates[dev.rateCount++] = param.sample_freq[i];
+        }
       }
     }
     AudioModule::logf("%s", line);
@@ -155,6 +176,9 @@ void describeFormats(const uint8_t altCount, char* summary, const size_t summary
   for (size_t i = 1; i < rateCount; ++i) {
     for (size_t j = i; j > 0 && rates[j - 1] > rates[j]; --j) std::swap(rates[j - 1], rates[j]);
   }
+  for (size_t i = 1; i < dev.rateCount; ++i) {
+    for (size_t j = i; j > 0 && dev.rates[j - 1] > dev.rates[j]; --j) std::swap(dev.rates[j - 1], dev.rates[j]);
+  }
   int n = snprintf(summary, summarySize, "%s%s%s-bit %uch", bits16 ? "16" : "", bits16 && bits24 ? "/" : "",
                    bits24 ? "24" : "", channels);
   for (size_t i = 0; i < rateCount && n < static_cast<int>(summarySize); ++i) {
@@ -163,9 +187,13 @@ void describeFormats(const uint8_t altCount, char* summary, const size_t summary
 }
 
 void closeAdapter(const char* reason) {
-  if (!handle) return;
-  uac_host_device_close(handle);
-  handle = nullptr;
+  {
+    IoGuard io;
+    if (!handle) return;
+    uac_host_device_close(handle);
+    handle = nullptr;
+    runningRate = 0;
+  }
   {
     LockGuard guard;
     connectedDevice = DeviceInfo{};
@@ -184,7 +212,7 @@ void openPending() {
     ifaceNum = pendingIface;
     pendingValid = false;
   }
-  if (handle) closeAdapter("replaced");
+  closeAdapter("replaced");
 
   uac_host_device_config_t config{};
   config.addr = addr;
@@ -193,11 +221,15 @@ void openPending() {
   config.buffer_threshold = RING_THRESHOLD;
   config.callback = onDeviceEvent;
   config.callback_arg = nullptr;
-  esp_err_t err = uac_host_device_open(&config, &handle);
+  uac_host_device_handle_t opened = nullptr;
+  esp_err_t err = uac_host_device_open(&config, &opened);
   if (err != ESP_OK) {
-    handle = nullptr;
     AudioModule::logf("Headphones: open addr %u iface %u failed: %s", addr, ifaceNum, esp_err_to_name(err));
     return;
+  }
+  {
+    IoGuard io;
+    handle = opened;
   }
 
   uac_host_dev_info_t info{};
@@ -209,12 +241,26 @@ void openPending() {
   }
   AudioModule::logf("Headphones: %04X:%04X \"%s\", output interface %u, %u formats", dev.vid, dev.pid, dev.product,
                     ifaceNum, info.iface_alt_num);
-  describeFormats(info.iface_alt_num, dev.formats, sizeof(dev.formats));
+  describeFormats(info.iface_alt_num, dev);
+  if (dev.rateCount == 0) AudioModule::logf("Headphones: no 16-bit stereo output, cannot play");
   {
     LockGuard guard;
     connectedDevice = dev;
   }
   currentState = State::Ready;
+  ++opens;
+}
+
+/** Applies volumePercent to the running stream (ioLock held). */
+void applyVolumeLocked() {
+  if (!handle || runningRate == 0) return;
+  if (volumePercent == 0) {
+    uac_host_device_set_mute(handle, true);
+    return;
+  }
+  uac_host_device_set_mute(handle, false);
+  const esp_err_t err = uac_host_device_set_volume(handle, volumePercent);
+  if (err != ESP_OK) AudioModule::logf("Headphones: no volume control (%s)", esp_err_to_name(err));
 }
 
 /** One segment of the tone into the driver: left (0), right (1) or both (2). False when cut short. */
@@ -235,50 +281,40 @@ bool playSegment(const int segment, const uint32_t rate, int16_t* chunk, float& 
       chunk[2 * i] = segment == 1 ? 0 : sample;
       chunk[2 * i + 1] = segment == 0 ? 0 : sample;
     }
-    const uint32_t size = n * CHANNELS * sizeof(int16_t);
-    const esp_err_t err =
-        uac_host_device_write(handle, reinterpret_cast<uint8_t*>(chunk), size, pdMS_TO_TICKS(WRITE_TIMEOUT_MS));
-    if (err == ESP_ERR_TIMEOUT) {
-      ++writeTimeouts;
+    if (streamWrite(chunk, n, WRITE_TIMEOUT_MS) != n) {
       AudioModule::logf("Headphones: the adapter stopped taking audio");
       return false;
     }
-    if (err != ESP_OK) {
-      AudioModule::logf("Headphones: write failed: %s", esp_err_to_name(err));
-      return false;
-    }
-    bytes += size;
+    bytes += n * CHANNELS * sizeof(int16_t);
     done += n;
   }
   return true;
 }
 
 void playTone() {
-  if (!handle) return;
-  uac_host_stream_config_t stream{};
-  stream.channels = CHANNELS;
-  stream.bit_resolution = BITS;
-  stream.sample_freq = TONE_RATE;
-  esp_err_t err = uac_host_device_start(handle, &stream);
-  if (err == ESP_ERR_NOT_FOUND) {
-    stream.sample_freq = FALLBACK_RATE;
-    err = uac_host_device_start(handle, &stream);
+  const uint32_t rate = bestRate(TONE_RATE);
+  uint8_t savedVolume = 0;
+  {
+    IoGuard io;
+    if (!handle || runningRate != 0) return;
+    toneRunning = true;
+    savedVolume = volumePercent;
+    volumePercent = TONE_VOLUME;
   }
-  if (err != ESP_OK) {
-    AudioModule::logf("Headphones: start %u ch %u-bit failed: %s", CHANNELS, BITS, esp_err_to_name(err));
+  if (rate == 0 || !streamStart(rate)) {
+    IoGuard io;
+    toneRunning = false;
+    volumePercent = savedVolume;
     return;
   }
-  currentState = State::Playing;
-
-  err = uac_host_device_set_volume(handle, ADAPTER_VOLUME);
   int16_t volumeDb = 0;
-  if (err == ESP_OK && uac_host_device_get_volume_db(handle, &volumeDb) == ESP_OK) {
-    // UAC reports volume in 1/256 dB.
-    AudioModule::logf("Headphones: volume %u%% (%.1f dB)", ADAPTER_VOLUME, volumeDb / 256.0);
-  } else if (err != ESP_OK) {
-    AudioModule::logf("Headphones: no volume control (%s)", esp_err_to_name(err));
+  {
+    IoGuard io;
+    if (handle && uac_host_device_get_volume_db(handle, &volumeDb) == ESP_OK) {
+      // UAC reports volume in 1/256 dB.
+      AudioModule::logf("Headphones: volume %u%% (%.1f dB)", TONE_VOLUME, volumeDb / 256.0);
+    }
   }
-  uac_host_device_set_mute(handle, false);
 
   auto* chunk = static_cast<int16_t*>(heap_caps_malloc(CHUNK_FRAMES * CHANNELS * sizeof(int16_t), MALLOC_CAP_INTERNAL));
   uint32_t bytes = 0;
@@ -286,23 +322,27 @@ void playTone() {
   bool complete = chunk != nullptr;
   float phase = 0.0f;
   for (int segment = 0; complete && segment < 3; ++segment) {
-    complete = playSegment(segment, stream.sample_freq, chunk, phase, bytes);
+    complete = playSegment(segment, rate, chunk, phase, bytes);
   }
   // The last writes are still in the ring buffer: let them play out before stopping the stream.
-  if (complete) vTaskDelay(pdMS_TO_TICKS(RING_BYTES * 1000 / (stream.sample_freq * CHANNELS * 2) + 20));
+  if (complete) vTaskDelay(pdMS_TO_TICKS(streamBufferedMs() + 20));
   const uint32_t elapsed = millis() - startMs;
   heap_caps_free(chunk);
-  uac_host_device_stop(handle);
+  streamStop();
+  {
+    IoGuard io;
+    toneRunning = false;
+    volumePercent = savedVolume;
+  }
 
   lastToneBytes = bytes;
   lastToneMs = elapsed;
   ++tones;
-  const uint32_t expectedMs = static_cast<uint32_t>(bytes / (stream.sample_freq * CHANNELS * 2.0f / 1000.0f));
+  const uint32_t expectedMs = static_cast<uint32_t>(bytes / (rate * CHANNELS * 2.0f / 1000.0f));
   AudioModule::logf("Headphones: tone %s at %lu Hz, %lu bytes in %lu ms (audio %lu ms), %lu transfer errors",
-                    complete ? "done" : "cut short", static_cast<unsigned long>(stream.sample_freq),
+                    complete ? "done" : "cut short", static_cast<unsigned long>(rate),
                     static_cast<unsigned long>(bytes), static_cast<unsigned long>(elapsed),
                     static_cast<unsigned long>(expectedMs), static_cast<unsigned long>(transferErrors.load()));
-  if (!stopping) currentState = handle ? State::Ready : State::Waiting;
 }
 
 void audioTaskMain(void*) {
@@ -324,8 +364,9 @@ void audioTaskMain(void*) {
 bool install() {
   if (driverInstalled) return true;
   if (!lock) lock = xSemaphoreCreateMutex();
+  if (!ioLock) ioLock = xSemaphoreCreateMutex();
   if (!audioDone) audioDone = xSemaphoreCreateBinary();
-  if (!lock || !audioDone) {
+  if (!lock || !ioLock || !audioDone) {
     currentState = State::Failed;
     return false;
   }
@@ -417,9 +458,98 @@ Counters counters() {
 }
 
 bool playTestTone() {
-  if (currentState.load() != State::Ready || !audioTask) return false;
+  if (!isConnected() || !audioTask || streamRate() != 0) return false;
   xTaskNotify(audioTask, NOTIFY_TONE, eSetBits);
   return true;
+}
+
+uint32_t connectCounter() { return opens.load(); }
+
+uint32_t bestRate(const uint32_t sourceRate) {
+  const DeviceInfo dev = device();
+  if (dev.rateCount == 0) return 0;
+  for (uint8_t i = 0; i < dev.rateCount; ++i) {
+    if (dev.rates[i] == sourceRate) return sourceRate;
+  }
+  // The 44.1 kHz family (11025, 22050, 88200) to 44.1 kHz, everything else to 48 kHz: whole
+  // ratios where possible.
+  const uint32_t preferred = sourceRate % 11025 == 0 ? 44100 : 48000;
+  for (uint8_t i = 0; i < dev.rateCount; ++i) {
+    if (dev.rates[i] == preferred) return preferred;
+  }
+  for (uint8_t i = 0; i < dev.rateCount; ++i) {
+    if (dev.rates[i] == 44100 || dev.rates[i] == 48000) return dev.rates[i];
+  }
+  return dev.rates[dev.rateCount - 1];
+}
+
+bool streamStart(const uint32_t rate) {
+  if (!ioLock) return false;
+  IoGuard io;
+  if (!handle) return false;
+  if (runningRate == rate) return true;
+  if (runningRate != 0) {
+    uac_host_device_stop(handle);
+    runningRate = 0;
+  }
+  uac_host_stream_config_t stream{};
+  stream.channels = CHANNELS;
+  stream.bit_resolution = BITS;
+  stream.sample_freq = rate;
+  const esp_err_t err = uac_host_device_start(handle, &stream);
+  if (err != ESP_OK) {
+    AudioModule::logf("Headphones: start %lu Hz failed: %s", static_cast<unsigned long>(rate), esp_err_to_name(err));
+    return false;
+  }
+  runningRate = rate;
+  applyVolumeLocked();
+  currentState = State::Playing;
+  return true;
+}
+
+size_t streamWrite(const int16_t* frames, const size_t count, const uint32_t timeoutMs) {
+  if (!ioLock || count == 0) return 0;
+  IoGuard io;
+  if (!handle || runningRate == 0) return 0;
+  const auto* bytes = reinterpret_cast<const uint8_t*>(frames);
+  const size_t total = count * CHANNELS * sizeof(int16_t);
+  size_t written = 0;
+  while (written < total) {
+    const size_t n = std::min(total - written, MAX_WRITE_BYTES);
+    const esp_err_t err =
+        uac_host_device_write(handle, const_cast<uint8_t*>(bytes + written), n, pdMS_TO_TICKS(timeoutMs));
+    if (err != ESP_OK) {
+      if (err == ESP_ERR_TIMEOUT) ++writeTimeouts;
+      break;
+    }
+    written += n;
+  }
+  return written / (CHANNELS * sizeof(int16_t));
+}
+
+void streamStop() {
+  if (!ioLock) return;
+  IoGuard io;
+  if (handle && runningRate != 0) uac_host_device_stop(handle);
+  runningRate = 0;
+  if (handle && !stopping) currentState = State::Ready;
+}
+
+uint32_t streamRate() { return runningRate.load(); }
+
+uint32_t streamBufferedMs() {
+  const uint32_t rate = streamRate();
+  // The driver does not report its fill; while playing it is kept full, so this is the most.
+  return rate ? static_cast<uint32_t>(RING_BYTES * 1000ull / (rate * CHANNELS * sizeof(int16_t))) : 0;
+}
+
+bool setVolume(const uint8_t percent) {
+  if (!ioLock) return false;
+  IoGuard io;
+  if (toneRunning) return false;
+  volumePercent = percent > 100 ? 100 : percent;
+  applyVolumeLocked();
+  return handle && runningRate != 0;
 }
 
 }  // namespace UsbAudioOut

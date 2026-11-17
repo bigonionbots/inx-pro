@@ -5,11 +5,16 @@
  * @brief USB headphone adapters (USB Audio Class 1.0) on the T5's USB-C port, in place of the
  *        audio module (LilyGo T5 S3, t5s3_audio only).
  *
- * The probe stage: when the USB link is on (AudioModule::setLinkEnabled), the UAC driver
+ * When the USB link is on (AudioModule::setLinkEnabled), the UAC driver
  * (third_party/usb_host/usb_host_uac) shares the USB host stack with the serial bridge drivers. An
- * adapter that enumerates is opened, its output formats go to the module log, and the Audio Module
- * screen can play a test tone through it: left, right, then both channels, quietly. Playback of
- * books and game sound through it comes later.
+ * adapter that enumerates is opened and its output formats go to the module log. Books play
+ * through it via UsbAudioSink, which decodes on the T5 and writes 16-bit stereo PCM with the
+ * stream calls below; the Audio Module screen can also play a test tone (left, right, then both
+ * channels, quietly).
+ *
+ * Threading: the stream calls may come from any task; one lock keeps them and the adapter's
+ * open/close (on this module's task) apart. streamWrite() blocks until the driver's buffer
+ * (about 90 ms) has room, which is what paces playback to the adapter's clock.
  *
  * Tested with a Sabrent AU-UCMA (C-Media 0D8C:0147: full speed, synchronous OUT endpoint,
  * 16/24-bit stereo at 44.1/48/96 kHz). UAC 2.0-only adapters are not supported by the driver.
@@ -35,6 +40,9 @@ struct DeviceInfo {
   char product[40] = {};
   /** Output formats, e.g. "16/24-bit 2ch 44100 48000 96000". */
   char formats[64] = {};
+  /** Rates the adapter takes for 16-bit stereo, ascending. */
+  uint32_t rates[8] = {};
+  uint8_t rateCount = 0;
 };
 
 struct Counters {
@@ -60,8 +68,27 @@ bool isConnected();
 DeviceInfo device();
 Counters counters();
 
-/** Starts the test tone (about 3 s) on the adapter's own task. False when no adapter is ready. */
+/** Starts the test tone (about 3 s) on the adapter's own task. False when no adapter is ready or a stream plays. */
 bool playTestTone();
+
+/** Increments every time an adapter is opened, so a player knows to start its stream again. */
+uint32_t connectCounter();
+
+/** The adapter rate closest to `sourceRate` that keeps resampling simple; 0 without an adapter. */
+uint32_t bestRate(uint32_t sourceRate);
+
+/** Starts 16-bit stereo output at `rate` (one of DeviceInfo::rates). True if already running at it. */
+bool streamStart(uint32_t rate);
+/** Writes stereo frames, waiting up to timeoutMs for room. Returns the frames the driver took. */
+size_t streamWrite(const int16_t* frames, size_t count, uint32_t timeoutMs);
+/** Stops output (what is buffered is dropped). */
+void streamStop();
+/** The running stream's rate, 0 if none. */
+uint32_t streamRate();
+/** PCM waiting in the driver, in ms (what streamWrite() is ahead of the speaker). */
+uint32_t streamBufferedMs();
+/** The adapter's volume, 0-100 across its own range (0 mutes). Needs a running stream. */
+bool setVolume(uint8_t percent);
 
 }  // namespace UsbAudioOut
 
