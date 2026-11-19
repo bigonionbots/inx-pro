@@ -28,9 +28,13 @@ namespace {
 constexpr uint32_t TONE_RATE = 44100;
 constexpr uint8_t CHANNELS = 2;
 constexpr uint8_t BITS = 16;
-/** About 90 ms of 44.1 kHz stereo in the driver's ring buffer. */
-constexpr uint32_t RING_BYTES = 16 * 1024;
-constexpr uint32_t RING_THRESHOLD = 4 * 1024;
+/**
+ * The driver's PCM ring buffer: about 45 ms of 44.1 kHz stereo, plus 16 ms in transfers. The
+ * driver creates it with xRingbufferCreate, which takes internal RAM for as long as the adapter is
+ * plugged in, and HTTPS needs 16 KB blocks of that (a 16 KB ring made streamed books' TLS fail).
+ */
+constexpr uint32_t RING_BYTES = 8 * 1024;
+constexpr uint32_t RING_THRESHOLD = 2 * 1024;
 /** 10 ms per tone write. */
 constexpr uint32_t CHUNK_FRAMES = 480;
 /** The most one driver write takes: half its buffer, so a write never waits for all of it. */

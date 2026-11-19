@@ -26,7 +26,7 @@ arduino-esp32 3.3.x ships the USB Host Library prebuilt (`libusb.a`) with
 `CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=256`. Enumeration then fails on any device whose
 configuration descriptor is longer ("Configuration descriptor larger than control transfer max
 length"), which includes USB audio adapters: the Sabrent AU-UCMA's is 519 bytes. `esp_idf_usb`
-is the same library compiled from source with the limit at 2048. All its objects are linked
+is the same library compiled from source with the limit at 1024. All its objects are linked
 from here, so no member of the prebuilt `libusb.a` is used (check `firmware.map` for `libusb.a(`
 after an update).
 

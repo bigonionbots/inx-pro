@@ -13,8 +13,9 @@
 /**
  * The prebuilt library allows 256 bytes, so enumeration fails on devices with a larger
  * configuration descriptor ("Configuration descriptor larger than control transfer max length").
- * USB audio adapters are the usual case: the Sabrent AU-UCMA's is 519 bytes. 2048 covers anything
- * the T5 is likely to see; it sizes one control transfer buffer per client and for enumeration.
+ * USB audio adapters are the usual case: the Sabrent AU-UCMA's is 519 bytes. It sizes several
+ * buffers in DMA-capable internal RAM (enumeration, the hub driver, each opened device), which
+ * HTTPS also needs, so it is no larger than simple adapters need: 1024.
  */
 #undef CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE
-#define CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE 2048
+#define CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE 1024

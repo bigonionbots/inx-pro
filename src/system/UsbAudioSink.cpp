@@ -45,6 +45,11 @@ constexpr uint32_t VOLUME_SAVE_DELAY_MS = 3000;
 constexpr uint32_t LOAD_LOG_MS = 60000;
 
 constexpr UBaseType_t TASK_PRIORITY = 4;  // under the USB host and UAC driver tasks (5)
+/**
+ * The application core, away from Wi-Fi (core 0), above the main loop and the stream feeder there,
+ * so a TLS handshake or a page layout cannot starve the adapter's small buffer.
+ */
+constexpr BaseType_t TASK_CORE = 1;
 constexpr uint32_t TASK_STACK_BYTES = 20 * 1024;
 
 void* psramAlloc(const size_t bytes) { return heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
@@ -320,7 +325,7 @@ void begin() {
     }
   }
   xTaskCreatePinnedToCoreWithCaps(decodeTaskMain, "usb_audio_dec", TASK_STACK_BYTES, nullptr, TASK_PRIORITY, nullptr,
-                                  tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                  TASK_CORE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 
 bool ready() { return lock && ring && UsbAudioOut::isConnected() && UsbAudioOut::device().rateCount > 0; }

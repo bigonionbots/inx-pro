@@ -14,7 +14,7 @@
  *
  * Threading: the stream calls may come from any task; one lock keeps them and the adapter's
  * open/close (on this module's task) apart. streamWrite() blocks until the driver's buffer
- * (about 90 ms) has room, which is what paces playback to the adapter's clock.
+ * (about 45 ms) has room, which is what paces playback to the adapter's clock.
  *
  * Tested with a Sabrent AU-UCMA (C-Media 0D8C:0147: full speed, synchronous OUT endpoint,
  * 16/24-bit stereo at 44.1/48/96 kHz). UAC 2.0-only adapters are not supported by the driver.
