@@ -194,6 +194,31 @@ against ffmpeg (MP3 ~96 dB SNR, AAC 45-77 dB) and the resampler at the rate pair
 A playing stream logs how much of real time decoding takes, once a minute
 (`Headphones: decoding takes N% of real time`).
 
+## Read-aloud EPUBs (narration synced with the text)
+
+EPUB 3 books with media overlays, such as Storyteller's "readaloud" EPUBs, carry their narration
+inside the book. Each sentence is wrapped in an element with an id (`<span id="id17-s1">`), and a
+SMIL file per chapter pairs every id with a stretch of an audio file in the EPUB.
+
+In the EPUB reader, the **Read Aloud** action (assign it to a button or double tap; the quick
+actions popup always lists it first for such books) plays the narration from the first sentence on
+the page. While it plays, the reader turns to the page each sentence starts on, across chapters.
+Turning pages by hand, or jumping through the contents, moves the narration to the first sentence
+of the new page. A page with no narration pauses it, and leaving the book stops it. The output is
+whatever the audiobook player uses: USB headphones or the module.
+
+- **Audio:** read in place from the EPUB through `AudioFile::openSdRange()`, so it must be stored
+  uncompressed in the zip (Storyteller does this). AAC in MP4 and MP3 work, the same as audiobooks.
+  Opus does not.
+- **Timeline:** `ReadAloudIndex` parses every SMIL file once and caches one table of clips in
+  `readaloud.bin` in the book's cache folder. Each clip is (sentence id hash, track, start, spine
+  item). A 19,000-sentence novel takes about 220 KB of PSRAM.
+- **Pages:** while a chapter of such a book is laid out, the parser records which page each element
+  id's first word lands on, and `Section` writes that to `sections/<n>.anc` next to the section
+  file. Sections cached before that are rebuilt once.
+- **Not yet:** highlighting the sentence being read. A sentence that runs onto the next page is
+  followed from the page it starts on.
+
 ## Audiobookshelf
 
 Books from an Audiobookshelf server can be streamed through the T5 or downloaded to the SD card.

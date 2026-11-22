@@ -270,6 +270,7 @@ class SystemSetting {
     BTN_ACTION_GENERATE_THUMBNAIL,
     BTN_ACTION_GO_TO_PERCENT,
     BTN_ACTION_TOGGLE_LIGHT,
+    BTN_ACTION_READ_ALOUD,  ///< read-aloud books: play / pause the narration (EpubReadAloud.h)
     READER_BUTTON_ACTION_COUNT
   };
 

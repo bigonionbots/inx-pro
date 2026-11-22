@@ -24,6 +24,7 @@
 #include "EpubDictionaryUi.h"
 #include "EpubFootnoteBody.h"
 #include "EpubImageViewerUi.h"
+#include "EpubReadAloud.h"
 #include "EpubReadingStats.h"
 #include "GoToPercentUi.h"
 #include "OrientationPickerUi.h"
@@ -65,6 +66,7 @@ class EpubActivity final : public ActivityWithSubactivity {
   friend class ReaderButtonBindings;
   friend class EpubNavigation;
   friend class WordLookup;
+  friend class EpubReadAloud;
 
  public:
   /**
@@ -312,6 +314,9 @@ class EpubActivity final : public ActivityWithSubactivity {
   OrientationPickerUi orientationPicker_;
   PresetPickerUi presetPicker_;
   QuickActionsMenuUi quickActionsUi_;
+#if INX_HAS_AUDIO_MODULE
+  EpubReadAloud readAloud_;
+#endif
   GoToPercentUi goToPercentUi_;
   ReaderButtonBindings btnBindings_;
 

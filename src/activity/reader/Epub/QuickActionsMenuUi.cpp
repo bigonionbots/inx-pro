@@ -26,6 +26,9 @@ constexpr int kRowHeight = UiLayout::LIST_ITEM_HEIGHT - 4;
 constexpr int kOverlayHeaderHeight = UiLayout::LIST_ITEM_HEIGHT - 4;
 
 bool isSupportedReaderAction(const int action) {
+#if !INX_HAS_AUDIO_MODULE
+  if (action == SystemSetting::BTN_ACTION_READ_ALOUD) return false;
+#endif
 #if INX_HAS_FRONTLIGHT
   return true;
 #else
@@ -72,6 +75,13 @@ void QuickActionsMenuUi::enter(EpubActivity& act) {
   std::sort(actions_.begin(), actions_.end(), [](const uint8_t a, const uint8_t b) {
     return strcmp(SystemSetting::readerButtonActionLabel(a), SystemSetting::readerButtonActionLabel(b)) < 0;
   });
+#if INX_HAS_AUDIO_MODULE
+  // A read-aloud book always offers its narration, first, whether or not it is picked in settings.
+  if (EpubReadAloud::available(act)) {
+    actions_.erase(std::remove(actions_.begin(), actions_.end(), SystemSetting::BTN_ACTION_READ_ALOUD), actions_.end());
+    actions_.insert(actions_.begin(), SystemSetting::BTN_ACTION_READ_ALOUD);
+  }
+#endif
   if (actions_.empty()) {
     act.readerPopup("No quick actions configured");
     return;

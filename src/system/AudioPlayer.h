@@ -87,6 +87,13 @@ struct RecentAudiobook {
   uint32_t durationMs = 0;  ///< 0 if unknown
 };
 
+/** One audio file of a read-aloud EPUB: an item stored uncompressed in it (ReadAloudIndex.h). */
+struct ReadAloudTrack {
+  std::string name;  ///< item path, picks the reader by its extension
+  uint64_t offset = 0;
+  uint32_t size = 0;
+};
+
 /** Starts the sender task. Call once at boot. */
 void begin();
 
@@ -105,6 +112,17 @@ bool openRemote(const Abs::ItemDetail& item);
 /** Opens a book at its saved position and starts playing. Turns the module link and power on. */
 bool open(const Book& book);
 void stop();
+
+/**
+ * Plays the narration of a read-aloud EPUB (EpubReadAloud.h) from ms in one of its tracks, read in
+ * place from the book file. Not added to the recent audiobooks: the reader keeps the place. Main loop.
+ */
+bool openReadAloud(const std::string& epubPath, const std::string& title, const std::vector<ReadAloudTrack>& tracks,
+                   int track, uint32_t ms);
+/** True while the open book is that EPUB's narration. */
+bool isReadAloud(const std::string& epubPath);
+/** Jumps to ms in a track of the open (local) book. Main loop. */
+void seekTrack(int track, uint32_t ms);
 
 void togglePause();
 /**

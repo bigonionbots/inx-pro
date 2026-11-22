@@ -23,6 +23,12 @@ class AudioFile {
 
   /** Opens a file on the SD card; nullptr if it cannot be opened. The caller holds SdIoMutex. */
   static std::unique_ptr<AudioFile> openSd(const std::string& path);
+  /**
+   * Opens `length` bytes at `offset` of a file on the SD card as a file of its own: an audio file
+   * stored uncompressed inside an EPUB (read-aloud books). nullptr if it cannot be opened or is
+   * shorter than that. The caller holds SdIoMutex.
+   */
+  static std::unique_ptr<AudioFile> openSdRange(const std::string& path, uint64_t offset, uint64_t length);
 };
 
 #endif  // INX_HAS_AUDIO_MODULE

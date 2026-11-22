@@ -79,6 +79,7 @@ constexpr uint32_t STREAM_HEALTH_LOG_MS = 20000;
 constexpr const char* WIFI_RECONNECTING_MESSAGE = "Reconnecting Wi-Fi...";
 constexpr uint32_t SYNC_TOLERANCE_MS = 2000;
 constexpr const char* ABS_KEY_PREFIX = "abs:";
+constexpr const char* READ_ALOUD_KEY_PREFIX = "readaloud:";
 
 // ---------------------------------------------------------------------------------------------
 // Queue between service() (producer, main loop) and the sender task (consumer).
@@ -575,6 +576,9 @@ struct TrackInfo {
   std::string name;  ///< file name, picks the reader
   uint32_t startOffsetMs = 0;
   uint32_t durationMs = 0;
+  /** Read-aloud books: the track is these bytes of the EPUB (book.path; 0: the whole file at `path`). */
+  uint64_t offset = 0;
+  uint64_t length = 0;
 };
 
 struct Progress {
@@ -588,6 +592,7 @@ bool isOpen = false;
 bool paused = false;
 bool finished = false;
 bool remote = false;
+bool readAloud = false;  // the open book is a read-aloud EPUB's narration (openReadAloud())
 Book book;
 std::string progressKey;
 std::vector<TrackInfo> tracks;
@@ -950,8 +955,9 @@ void countListening() {
 void saveProgress() {
   if (!isOpen) return;
   flushListening();
-  // The recent list (Audiobooks page, Home widget) keeps the book's place.
-  noteRecent(currentRecent());
+  // The recent list (Audiobooks page, Home widget) keeps the book's place. A read-aloud book is an
+  // EPUB: the reader keeps its place, and the Audiobooks page could not open it.
+  if (!readAloud) noteRecent(currentRecent());
   if (isAbsBook()) {
     const uint32_t now = bookMs();
     const uint32_t moved = now > lastPushedBookMs ? now - lastPushedBookMs : lastPushedBookMs - now;
@@ -1037,7 +1043,9 @@ bool openTrack(const int index) {
     return false;
   }
   SdIoMutex::Lock lock;
-  if (!next->open(AudioFile::openSd(info.path))) {
+  // A read-aloud book's tracks are all in its EPUB (book.path, kept once rather than per track).
+  if (!next->open(info.length ? AudioFile::openSdRange(readAloud ? book.path : info.path, info.offset, info.length)
+                              : AudioFile::openSd(info.path))) {
     message = baseName(info.name) + ": " + next->error();
     AudioModule::logf("Player: %s", message.c_str());
     return false;
@@ -1052,7 +1060,7 @@ bool openTrack(const int index) {
   uint64_t coverOffset = 0;
   uint32_t coverLength = 0;
   bool coverPng = false;
-  if (coverPath.empty() && next->embeddedCover(coverOffset, coverLength, coverPng)) {
+  if (coverPath.empty() && !readAloud && next->embeddedCover(coverOffset, coverLength, coverPng)) {
     coverPath = cacheEmbeddedCover(info.path, coverOffset, coverLength, coverPng);
   }
   source = std::move(next);
@@ -1258,10 +1266,15 @@ void applySyncResult() {
   }
 }
 
-/** Common tail of open() and openRemote(): saved position, playback, first sync. */
-bool startBook() {
+/**
+ * Common tail of open(), openRemote() and openReadAloud(): saved position (or `start`), playback,
+ * first sync.
+ */
+bool startBook(const Progress* start = nullptr) {
   Progress saved;
-  {
+  if (start) {
+    saved = *start;
+  } else {
     SdIoMutex::Lock lock;
     const auto entries = loadAllProgress();
     const auto match =
@@ -1374,6 +1387,7 @@ bool open(const Book& next) {
   message.clear();
   book = next;
   remote = false;
+  readAloud = false;
   tracks.clear();
   bookChapters.clear();
   coverPath.clear();
@@ -1426,6 +1440,7 @@ bool openRemote(const Abs::ItemDetail& item) {
   book.title = item.title;
   book.absItemId = item.id;
   remote = true;
+  readAloud = false;
   tracks.clear();
   std::transform(item.tracks.begin(), item.tracks.end(), std::back_inserter(tracks), [](const Abs::Track& t) {
     return TrackInfo{"", t.contentUrl, t.filename, t.startOffsetMs, t.durationMs};
@@ -1445,6 +1460,49 @@ bool openRemote(const Abs::ItemDetail& item) {
   return started;
 }
 
+bool openReadAloud(const std::string& epubPath, const std::string& title, const std::vector<ReadAloudTrack>& files,
+                   const int startTrack, const uint32_t startMs) {
+  stop();
+  wifiParked = false;
+  message.clear();
+  book = Book{};
+  book.path = epubPath;
+  book.title = title;
+  remote = false;
+  readAloud = true;
+  tracks.clear();
+  bookChapters.clear();
+  coverPath.clear();
+  bookAuthor.clear();
+  for (const ReadAloudTrack& file : files) {
+    TrackInfo info{"", "", file.name, 0, 0};  // the EPUB is book.path; short names need no heap
+    info.offset = file.offset;
+    info.length = file.size;
+    tracks.push_back(std::move(info));
+  }
+  if (tracks.empty()) {
+    message = "No narration";
+    readAloud = false;
+    return false;
+  }
+  progressKey = std::string(READ_ALOUD_KEY_PREFIX) + epubPath;
+  Progress start;
+  start.track = startTrack;
+  start.ms = startMs;
+  const bool started = startBook(&start);
+  if (!started) readAloud = false;
+  return started;
+}
+
+bool isReadAloud(const std::string& epubPath) { return isOpen && readAloud && book.path == epubPath; }
+
+void seekTrack(const int index, const uint32_t ms) {
+  if (!isOpen || remote || index < 0 || index >= static_cast<int>(tracks.size())) return;
+  if (index != track && !openTrack(index)) return;
+  startStream(ms);
+  saveProgress();
+}
+
 void stop() {
   if (!isOpen) return;
   saveProgress();
@@ -1454,6 +1512,7 @@ void stop() {
   source.reset();
   isOpen = false;
   remote = false;
+  readAloud = false;
 }
 
 void togglePause() {

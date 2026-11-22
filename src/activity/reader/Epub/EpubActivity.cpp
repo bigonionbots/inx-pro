@@ -1457,6 +1457,9 @@ bool EpubActivity::handleWordSelection() {
  */
 void EpubActivity::onExit() {
   invalidatePreparedPage();
+#if INX_HAS_AUDIO_MODULE
+  readAloud_.exit(*this);
+#endif
   const bool clearImagePageOnExit = lastPageHadImages && lastPageHadHighQualityImage;
   closeWordSelection();
   resetPageNoteState();
@@ -1769,6 +1772,12 @@ void EpubActivity::loop() {
     lastAutoPageTurnTime = millis();
     return;
   }
+
+#if INX_HAS_AUDIO_MODULE
+  if (readAloud_.tick(*this)) {
+    return;
+  }
+#endif
 
   if (bookSettings.pageAutoTurnSeconds > 0 && (!navigation_ || !navigation_->isTocOpen()) && !settingsDrawerVisible) {
     if (lastAutoPageTurnTime == 0) {

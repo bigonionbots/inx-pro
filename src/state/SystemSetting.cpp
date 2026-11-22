@@ -244,7 +244,8 @@ const char* SystemSetting::readerButtonActionLabel(const uint8_t action) {
                                         "Generate Full Data",
                                         "Generate Thumbnail",
                                         "Go to Percent",
-                                        "Toggle Light"};
+                                        "Toggle Light",
+                                        "Read Aloud"};
   if (action >= SystemSetting::READER_BUTTON_ACTION_COUNT) {
     return "None";
   }

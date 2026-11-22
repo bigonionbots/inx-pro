@@ -49,6 +49,9 @@ void drawScrollBar(const GfxRenderer& renderer, const int x, const int y, const 
 }
 
 bool isSupportedReaderAction(const int action) {
+#if !INX_HAS_AUDIO_MODULE
+  if (action == SystemSetting::BTN_ACTION_READ_ALOUD) return false;
+#endif
 #if INX_HAS_FRONTLIGHT
   return true;
 #else

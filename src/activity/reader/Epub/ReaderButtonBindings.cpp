@@ -147,6 +147,11 @@ void ReaderButtonBindings::dispatch(EpubActivity& act, const uint8_t action) {
       act.pauseReadingStats();
       act.goToPercentUi_.enter(act);
       break;
+    case SystemSetting::BTN_ACTION_READ_ALOUD:
+#if INX_HAS_AUDIO_MODULE
+      act.readAloud_.toggle(act);
+#endif
+      break;
     case SystemSetting::BTN_ACTION_TOGGLE_LIGHT:
 #if INX_HAS_FRONTLIGHT || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_PICCO
       if (frontlight.present()) {

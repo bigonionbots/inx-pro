@@ -505,6 +505,7 @@ constexpr FallbackKey kFallbackKeys[] = {
     {"Generate Thumbnail", "reader_action.generate_thumbnail"},
     {"Go to Percent", "reader_action.go_to_percent"},
     {"Toggle Light", "reader_action.toggle_light"},
+    {"Read Aloud", "reader_action.read_aloud"},
     {"Off", "value.off"},
     {"1 page", "value.1_page"},
     {"5 pages", "value.5_pages"},

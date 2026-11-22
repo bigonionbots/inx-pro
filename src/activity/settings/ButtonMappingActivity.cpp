@@ -44,6 +44,9 @@ const char* buttonLabel(const int row) {
 const char* pageTurnLabel(const uint8_t mode) { return mode == ReaderSetting::PAGE_TURN_SWIPE ? "Swipe" : "Tap"; }
 
 bool isSupportedReaderAction(const int action) {
+#if !INX_HAS_AUDIO_MODULE
+  if (action == SystemSetting::BTN_ACTION_READ_ALOUD) return false;
+#endif
 #if INX_HAS_FRONTLIGHT
   return true;
 #else
