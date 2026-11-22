@@ -44,6 +44,8 @@ constexpr uint32_t VOLUME_SAVE_DELAY_MS = 3000;
 /** A playing stream logs its decode load this often. */
 constexpr uint32_t LOAD_LOG_MS = 60000;
 
+/** How long the adapter's stream outlives the book's (seeks restart the book's). */
+constexpr uint32_t IDLE_RELEASE_MS = 3000;
 constexpr UBaseType_t TASK_PRIORITY = 4;  // under the USB host and UAC driver tasks (5)
 /**
  * The application core, away from Wi-Fi (core 0), above the main loop and the stream feeder there,
@@ -153,7 +155,8 @@ void decodeTaskMain(void*) {
   uint32_t windowGeneration = UINT32_MAX;
   bool decoderReady = false;
   bool starving = false;
-  bool ownsStream = false;  // this task started the adapter's stream (not the test tone)
+  bool ownsStream = false;   // this task started the adapter's stream (not the test tone)
+  uint32_t idleSinceMs = 0;  // when the book's stream went idle (0: it is not)
   uint32_t loadLogMs = 0;
   uint64_t decodeUs = 0;
   uint64_t audioUs = 0;
@@ -189,9 +192,18 @@ void decodeTaskMain(void*) {
       }
       resampler.reset();
     }
-    if (now == PlayState::Idle && ownsStream) {
-      UsbAudioOut::streamStop();  // the book stopped: free the adapter (the test tone needs it)
-      ownsStream = false;
+    if (now != PlayState::Idle) {
+      idleSinceMs = 0;
+    } else if (ownsStream) {
+      // The book stopped: free the adapter (the test tone needs it), but not during a seek, which
+      // stops one stream and starts the next. Starting the adapter again needs DMA-capable
+      // internal RAM that may not be there with a book open in the reader.
+      if (idleSinceMs == 0) idleSinceMs = millis() | 1;
+      if (millis() - idleSinceMs >= IDLE_RELEASE_MS) {
+        UsbAudioOut::streamStop();
+        ownsStream = false;
+        idleSinceMs = 0;
+      }
     }
     if (now == PlayState::Idle || now == PlayState::Finished || isPaused || !decoderReady) {
       vTaskDelay(pdMS_TO_TICKS(10));
