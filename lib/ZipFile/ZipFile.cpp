@@ -248,6 +248,31 @@ bool ZipFile::loadFileStatSlim(const char* filename, FileStatSlim* fileStat) {
   return found;
 }
 
+bool ZipFile::getStoredRanges(const std::vector<std::string>& filenames,
+                              std::vector<std::pair<uint64_t, uint32_t>>& out) {
+  out.assign(filenames.size(), std::make_pair(uint64_t{0}, uint32_t{0}));
+  std::vector<std::pair<FileStatSlim, size_t>> entries;
+  for (size_t i = 0; i < filenames.size(); ++i) {
+    FileStatSlim fileStat = {};
+    if (loadFileStatSlim(filenames[i].c_str(), &fileStat) && fileStat.method == 0) entries.emplace_back(fileStat, i);
+  }
+  std::sort(entries.begin(), entries.end(),
+            [](const auto& a, const auto& b) { return a.first.localHeaderOffset < b.first.localHeaderOffset; });
+  const bool wasOpen = isOpen();
+  if (!wasOpen && !open()) return false;
+  // An unfragmented file seeks in constant time once SdFat knows it is contiguous; otherwise each
+  // seek follows the FAT chain, which in file order is one walk in total.
+  file.contiguousRange(nullptr, nullptr);
+  for (const auto& entry : entries) {
+    const long dataOffset = getDataOffset(entry.first);
+    if (dataOffset >= 0)
+      out[entry.second] = std::make_pair(static_cast<uint64_t>(dataOffset), entry.first.uncompressedSize);
+    delay(1);  // let the idle tasks run (task watchdog)
+  }
+  if (!wasOpen) close();
+  return true;
+}
+
 long ZipFile::getDataOffset(const FileStatSlim& fileStat) {
   const bool wasOpen = isOpen();
   if (!wasOpen && !open()) {

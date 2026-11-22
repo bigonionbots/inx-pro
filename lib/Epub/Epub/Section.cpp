@@ -35,6 +35,11 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(bool) + sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint32_t);
 constexpr uint16_t MAX_CACHED_PAGE_OFFSETS = 2048;
+constexpr uint32_t ANCHORS_MAGIC = 0x31434e41;  // "ANC1"
+
+std::string anchorsPath(const std::string& cachePath, const int spineIndex) {
+  return cachePath + "/sections/" + std::to_string(spineIndex) + ".anc";
+}
 }
 
 Section::Section(const std::shared_ptr<Epub>& epubIn, const int spineIndexIn, GfxRenderer& rendererIn)
@@ -150,6 +155,14 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
   clearPageCache();
 
   if (epub) Hyphenator::setPreferredLanguage(epub->getLanguage());
+
+#if INX_HAS_AUDIO_MODULE
+  // A read-aloud book's sections also record where each sentence is: rebuild one laid out without.
+  if (epub && epub->hasMediaOverlays() && !SdMan.exists(anchorsPath(epub->getCachePath(), spineIndex).c_str())) {
+    clearCache();
+    return false;
+  }
+#endif
 
   if (!SdMan.openFileForRead("SCT", filePath, file)) return false;
 
@@ -407,6 +420,12 @@ bool Section::createSectionFile(const int fontId, const int headerFontId, const 
       warmImageDisplayCache, warmImageRenderMode, warmImageQuality, warmImageYOffset, popupFn);
 
   visitor.internalPath = localPath;
+#if INX_HAS_AUDIO_MODULE
+  const bool collectAnchors = epub->hasMediaOverlays();
+  visitor.setCollectAnchors(collectAnchors);
+  const std::string anchorsFile = anchorsPath(epub->getCachePath(), spineIndex);
+  SdMan.remove(anchorsFile.c_str());
+#endif
 
   Hyphenator::setPreferredLanguage(epub->getLanguage());
 
@@ -479,6 +498,22 @@ bool Section::createSectionFile(const int fontId, const int headerFontId, const 
     serialization::writePod(file, lutOffset);
     file.close();
   }
+#if INX_HAS_AUDIO_MODULE
+  if (collectAnchors) {
+    EpubImagePrefetch::IoLock ioLock;
+    FsFile anchors;
+    if (SdMan.openFileForWrite("SCT", anchorsFile, anchors)) {
+      const auto& entries = visitor.anchors();
+      serialization::writePod(anchors, ANCHORS_MAGIC);
+      serialization::writePod(anchors, static_cast<uint32_t>(entries.size()));
+      for (const auto& entry : entries) {
+        serialization::writePod(anchors, anchorHash(entry.first.data(), entry.first.size()));
+        serialization::writePod(anchors, entry.second);
+      }
+      anchors.close();
+    }
+  }
+#endif
   epub->flushImageMetadata();
   return true;
 }
@@ -556,6 +591,31 @@ bool Section::preloadPage(const int pageIndex) { return loadPage(pageIndex) != n
  *
  * @return true if file was successfully removed or didn't exist, false on error
  */
+bool Section::loadAnchors(const std::string& cachePath, const int spineIndex,
+                          std::vector<std::pair<uint32_t, uint16_t>>& out) {
+  out.clear();
+  FsFile in;
+  if (!SdMan.openFileForRead("SCT", anchorsPath(cachePath, spineIndex), in)) return false;
+  uint32_t magic = 0;
+  uint32_t count = 0;
+  serialization::readPod(in, magic);
+  serialization::readPod(in, count);
+  if (magic != ANCHORS_MAGIC || count > in.fileSize() / 6) {
+    in.close();
+    return false;
+  }
+  out.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t hash = 0;
+    uint16_t page = 0;
+    serialization::readPod(in, hash);
+    serialization::readPod(in, page);
+    out.emplace_back(hash, page);
+  }
+  in.close();
+  return true;
+}
+
 bool Section::clearCache() const {
   if (SdMan.exists(filePath.c_str())) {
     return SdMan.remove(filePath.c_str());

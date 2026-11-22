@@ -113,6 +113,13 @@ class ZipFile {
     return index < fileStatSlimCache.size() ? fileStatSlimCache[index].name.c_str() : nullptr;
   }
   bool getInflatedFileSize(const char* filename, size_t* size);
+  /**
+   * Where uncompressed (stored) entries' bytes are in the ZIP file, so they can be read in place
+   * (read-aloud books' audio): (offset, size) per name, size 0 for one that is missing or
+   * compressed. One pass in file order with fast seeks, so a large archive on FAT32 does not walk
+   * its cluster chain once per entry. False if the archive cannot be opened.
+   */
+  bool getStoredRanges(const std::vector<std::string>& filenames, std::vector<std::pair<uint64_t, uint32_t>>& out);
   std::unique_ptr<Stream> openStream(const char* filename);
 
   int fillUncompressedSizes(std::vector<SizeTarget>& targets, std::vector<uint32_t>& sizes);

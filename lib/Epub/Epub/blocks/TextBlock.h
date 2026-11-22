@@ -54,6 +54,8 @@ class TextBlock final : public Block {
     std::vector<uint16_t> wordImageW;
     std::vector<uint16_t> wordImageH;
     std::vector<std::string> wordFootnoteTargets;
+    /** Element ids starting on this line (space-separated), while a read-aloud book is laid out. Not serialized. */
+    std::string anchors;
   };
 
   struct WordSlot {
@@ -160,6 +162,12 @@ class TextBlock final : public Block {
   bool isEmpty() override { return wordSlots.empty(); }
 
   size_t getWordCount() const { return wordSlots.size(); }
+  /** See Extra::anchors (ParsedText::setLastWordAnchors()). */
+  void setAnchors(std::string ids) {
+    if (!ids.empty()) ensureExtra().anchors = std::move(ids);
+  }
+  /** Takes the line's element ids (empty when none), leaving none behind. */
+  std::string takeAnchors() { return extra ? std::move(extra->anchors) : std::string(); }
   /** True if any word in the line is flagged small caps. */
   bool hasSmallCaps() const {
     return smallCapsDefault != 0 ||

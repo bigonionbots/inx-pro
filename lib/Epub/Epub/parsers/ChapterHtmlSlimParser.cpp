@@ -1176,12 +1176,17 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
         renderer, activeBlockFontId(), static_cast<uint16_t>(std::max(1, currentTextBlockContentWidth)),
         [this](TextBlock&& textBlock) { addLineToPage(std::move(textBlock)); }, false);
   }
+  const size_t wordsBefore = currentTextBlock->size();
   currentTextBlock->addWord(partWordBuffer, fontStyle, smallCapsActive, underlineActive, nextWordJoinsPrevious,
                             verticalAlign,
                             static_cast<int16_t>(std::max<int>(
                                 std::numeric_limits<int16_t>::min(),
                                 std::min<int>(std::numeric_limits<int16_t>::max(), currentInlineXOffsetPx))),
                             footnoteActive ? currentFootnoteTarget : std::string());
+  if (!pendingAnchors_.empty() && currentTextBlock->size() > wordsBefore) {
+    currentTextBlock->setLastWordAnchors(std::move(pendingAnchors_));
+    pendingAnchors_.clear();
+  }
   nextWordJoinsPrevious = false;
   partWordBufferIndex = 0;
 }
@@ -2068,6 +2073,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   std::string styleAttr;
   std::string tagLower;
   extractSelectorAttributes(name, atts, tagLower, classAttr, idAttr, styleAttr);
+  if (self->collectAnchors_ && !idAttr.empty()) {
+    if (!self->pendingAnchors_.empty()) self->pendingAnchors_.push_back(' ');
+    self->pendingAnchors_ += idAttr;
+  }
   const bool applyCssTextLayout = self->shouldApplyCssTextLayout(tagLower);
   // Font-size is independent from paragraph alignment. Even when the user
   // chooses a fixed alignment, an explicit CSS font-size still scales from
@@ -2674,6 +2683,17 @@ void ChapterHtmlSlimParser::addLineToPage(TextBlock&& line) {
 
   if (!currentPage) currentPage.reset(new Page());
 
+  if (collectAnchors_) {
+    // The page being filled is the one after those completed so far.
+    std::string ids = line.takeAnchors();
+    for (size_t start = 0; start < ids.size();) {
+      size_t end = ids.find(' ', start);
+      if (end == std::string::npos) end = ids.size();
+      if (end > start) anchors_.emplace_back(ids.substr(start, end - start), completedPages_);
+      start = end + 1;
+    }
+  }
+
   if (!currentPage->elements.empty() && currentPage->elements.back()->getTag() == TAG_PageDropCap &&
       line.getWordCount() > 0) {
     auto* dropCap = static_cast<PageDropCap*>(currentPage->elements.back().get());
@@ -2750,6 +2770,7 @@ void ChapterHtmlSlimParser::completeCurrentPage() {
 
   currentPage->trimElementStorage();
   completePageFn(std::move(currentPage));
+  ++completedPages_;
   for (auto& scope : cssBorderBoxStack) {
     scope.elem = nullptr;
   }

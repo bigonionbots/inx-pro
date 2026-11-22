@@ -36,6 +36,9 @@ class ParsedText {
   bool hasInlineImages_ = false;
   std::deque<std::string> wordFootnoteTargets;
   bool hasFootnoteLinks_ = false;
+  /** Element ids (space-separated) that start at each word, for read-aloud books; empty when untracked. */
+  std::deque<std::string> wordAnchors;
+  bool hasAnchors_ = false;
   /** Widest natural (pre-alignment) line content width seen during layout; used to size CSS border rules. */
   uint16_t maxLineContentWidth_ = 0;
   TextBlock::Style style;
@@ -83,6 +86,11 @@ class ParsedText {
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool smallCaps = false, bool underline = false,
                bool joinPrevious = false, uint8_t verticalAlign = TextBlock::BASELINE, int16_t xOffset = 0,
                std::string footnoteTarget = "");
+  /**
+   * Records element ids (space-separated) that start at the last word added: the line holding that
+   * word carries them (TextBlock::anchors()), so the parser can tell which page each id lands on.
+   */
+  void setLastWordAnchors(std::string ids);
   /** Appends an inline image that flows on the line as an atomic word of the given on-screen size. */
   void addImage(std::string cachePath, uint16_t displayW, uint16_t displayH);
   void setStyle(const TextBlock::Style style) { this->style = style; }

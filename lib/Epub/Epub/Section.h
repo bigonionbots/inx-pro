@@ -100,6 +100,23 @@ class Section {
                        uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
                        bool hyphenationEnabled, bool respectCssParagraphIndent, bool bionicReadingEnabled);
   bool loadSectionFileForPreview(int* outFontId = nullptr);
+
+  /** FNV-1a of an element id: how read-aloud anchors are matched to media-overlay clips. */
+  static uint32_t anchorHash(const char* id, size_t length) {
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < length; ++i) {
+      hash ^= static_cast<uint8_t>(id[i]);
+      hash *= 16777619u;
+    }
+    return hash;
+  }
+  /**
+   * For books with media overlays: the page each element id of a section starts on, as
+   * (anchorHash(id), page) in reading order. Written alongside the section file when it is built.
+   * False if the section was built without them.
+   */
+  static bool loadAnchors(const std::string& cachePath, int spineIndex,
+                          std::vector<std::pair<uint32_t, uint16_t>>& out);
   static std::unique_ptr<Page> loadCachedPage(const std::string& cachePath, int spineIndex, int pageNumber);
 
   /**

@@ -33,6 +33,7 @@ class Epub {
   mutable uint8_t zipStreamDepth_ = 0;
   mutable std::unique_ptr<CssParser> parsedCssParser_;
   mutable bool parsedCssLoaded_ = false;
+  mutable int8_t mediaOverlays_ = -1;  ///< hasMediaOverlays(): -1 until checked
 
   struct ImageMetadata {
     EpubPsramString path;
@@ -132,6 +133,16 @@ class Epub {
                                 size_t maxOutputBytes = static_cast<size_t>(-1)) const;
   std::unique_ptr<ItemStream> openItemStream(const std::string& itemHref) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
+  /**
+   * Where stored (uncompressed) items' bytes are in the EPUB file: (offset, size) per href, size 0
+   * for one that is missing or compressed (ZipFile::getStoredRanges()).
+   */
+  bool getStoredItemRanges(const std::vector<std::string>& itemHrefs,
+                           std::vector<std::pair<uint64_t, uint32_t>>& out) const;
+  /** Every item path in the archive whose name ends in `suffix` (ASCII, case-insensitive), in name order. */
+  std::vector<std::string> itemsWithSuffix(const char* suffix) const;
+  /** True for EPUB 3 books with media overlays (read-aloud: text synchronised with narration). */
+  bool hasMediaOverlays() const;
 
   /**
    * Reads only enough of an image entry to obtain intrinsic dimensions. This

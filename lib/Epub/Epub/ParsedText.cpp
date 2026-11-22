@@ -220,6 +220,20 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   if (hasFootnoteLinks_) {
     wordFootnoteTargets.push_back(std::move(footnoteTarget));
   }
+  if (hasAnchors_) {
+    wordAnchors.emplace_back();
+  }
+}
+
+void ParsedText::setLastWordAnchors(std::string ids) {
+  if (words.empty() || ids.empty()) return;
+  if (!hasAnchors_) {
+    wordAnchors.assign(words.size(), std::string());
+    hasAnchors_ = true;
+  }
+  std::string& last = wordAnchors.back();
+  if (!last.empty()) last.push_back(' ');
+  last += ids;
 }
 
 void ParsedText::addImage(std::string cachePath, const uint16_t displayW, const uint16_t displayH) {
@@ -241,6 +255,9 @@ void ParsedText::addImage(std::string cachePath, const uint16_t displayW, const 
   wordJoinPrevious.push_back(0);
   if (hasFootnoteLinks_) {
     wordFootnoteTargets.emplace_back();
+  }
+  if (hasAnchors_) {
+    wordAnchors.emplace_back();
   }
   wordImagePaths.push_back(std::move(cachePath));
   wordImageW.push_back(displayW);
@@ -715,6 +732,10 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   if (blockHasFootnoteLinks) {
     wordFootnoteTargets.insert(std::next(footnoteIt), *footnoteIt);
   }
+  if (hasAnchors_) {
+    // The remainder of a split word starts no element: ids stay with the word's first part.
+    wordAnchors.insert(wordAnchors.begin() + static_cast<std::ptrdiff_t>(wordIndex) + 1, std::string());
+  }
 
   wordWidths[wordIndex] = static_cast<uint16_t>(chosenWidth);
   const uint16_t remainderWidth = measureWordWidth(renderer, fontId, remainder, style, remainderBionic, smallCaps);
@@ -875,9 +896,20 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     lineWordFootnoteTargets = moveListPrefixToVector(wordFootnoteTargets, lineWordCount);
   }
 
-  processLine(TextBlock(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles), bionicDefault,
-                        std::move(lineBionicPrefixBytes), smallCapsDefault, std::move(lineWordSmallCaps), style,
-                        underlineDefault, std::move(lineWordUnderline), verticalAlignDefault,
-                        std::move(lineWordVerticalAlign), std::move(lineWordImagePaths), std::move(lineWordImageW),
-                        std::move(lineWordImageH), std::move(lineWordFootnoteTargets)));
+  std::string lineAnchors;
+  if (hasAnchors_) {
+    for (std::string& ids : moveListPrefixToVector(wordAnchors, lineWordCount)) {
+      if (ids.empty()) continue;
+      if (!lineAnchors.empty()) lineAnchors.push_back(' ');
+      lineAnchors += ids;
+    }
+  }
+
+  TextBlock line(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles), bionicDefault,
+                 std::move(lineBionicPrefixBytes), smallCapsDefault, std::move(lineWordSmallCaps), style,
+                 underlineDefault, std::move(lineWordUnderline), verticalAlignDefault, std::move(lineWordVerticalAlign),
+                 std::move(lineWordImagePaths), std::move(lineWordImageW), std::move(lineWordImageH),
+                 std::move(lineWordFootnoteTargets));
+  if (!lineAnchors.empty()) line.setAnchors(std::move(lineAnchors));
+  processLine(std::move(line));
 }

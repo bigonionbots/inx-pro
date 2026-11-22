@@ -83,6 +83,11 @@ class ChapterHtmlSlimParser {
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
+  /** Read-aloud books: record which page each element id starts on (setCollectAnchors()). */
+  bool collectAnchors_ = false;
+  std::string pendingAnchors_;  ///< ids opened since the last word, attached to the next one
+  uint16_t completedPages_ = 0;
+  std::vector<std::pair<std::string, uint16_t>> anchors_;
   int currentTextBlockContentX = 0;
   int currentTextBlockContentWidth = 1;
 
@@ -457,4 +462,12 @@ class ChapterHtmlSlimParser {
   bool finishParse();
   void cancelParse();
   bool parseActive() const { return parseActive_; }
+
+  /**
+   * Records, for every element id, the page its first word lands on (read-aloud books map their
+   * sentences to pages with it). Off by default: books without media overlays pay nothing.
+   */
+  void setCollectAnchors(const bool collect) { collectAnchors_ = collect; }
+  /** (id, page) in reading order; ids that hold no word attach to the next word. */
+  const std::vector<std::pair<std::string, uint16_t>>& anchors() const { return anchors_; }
 };

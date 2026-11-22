@@ -1252,6 +1252,38 @@ bool Epub::getItemSize(const std::string& href, size_t* size) const {
       FsHelpers::normalisePath(FsHelpers::decodeUriPath(href)).c_str(), size);
 }
 
+bool Epub::getStoredItemRanges(const std::vector<std::string>& hrefs,
+                               std::vector<std::pair<uint64_t, uint32_t>>& out) const {
+  std::vector<std::string> names;
+  names.reserve(hrefs.size());
+  for (const std::string& href : hrefs) names.push_back(FsHelpers::normalisePath(FsHelpers::decodeUriPath(href)));
+  return zipForNestedOperation().getStoredRanges(names, out);
+}
+
+std::vector<std::string> Epub::itemsWithSuffix(const char* suffix) const {
+  std::vector<std::string> out;
+  ZipFile& archive = zipForNestedOperation();
+  if (!archive.hasFileStatSlims()) return out;
+  const size_t suffixLength = strlen(suffix);
+  for (size_t i = 0; i < archive.entryCount(); ++i) {
+    const char* name = archive.fileNameAt(i);
+    const size_t length = name ? strlen(name) : 0;
+    if (length < suffixLength) continue;
+    bool match = true;
+    for (size_t j = 0; j < suffixLength && match; ++j) {
+      match = tolower(static_cast<unsigned char>(name[length - suffixLength + j])) ==
+              tolower(static_cast<unsigned char>(suffix[j]));
+    }
+    if (match) out.emplace_back(name);
+  }
+  return out;
+}
+
+bool Epub::hasMediaOverlays() const {
+  if (mediaOverlays_ < 0) mediaOverlays_ = itemsWithSuffix(".smil").empty() ? 0 : 1;
+  return mediaOverlays_ == 1;
+}
+
 bool Epub::probeImageDimensions(const std::string& itemHref, int* width, int* height) const {
   if (!width || !height || itemHref.empty()) return false;
   *width = 0;
